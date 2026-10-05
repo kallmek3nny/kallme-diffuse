@@ -394,11 +394,13 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogFieldShader: BitmapShader? = null
         private var ogOldFieldShaderBitmap: Bitmap? = null
         private var ogOldFieldShader: BitmapShader? = null
-        private val idleFieldPaint = Paint().apply { isDither = true }
-        private var idleFieldGradient: LinearGradient? = null
+        private val idleFieldPaint = Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = true
+        }
+        private var idleFieldBitmap: Bitmap? = null
         private var idleFieldColors: List<Int> = emptyList()
-        private var idleFieldWidth = 0f
-        private var idleFieldHeight = 0f
         private val ogFieldPaint = Paint().apply {
             isAntiAlias = true
             isFilterBitmap = true
@@ -551,6 +553,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 ogFieldNew?.recycle()
                 ogFieldOld?.recycle()
                 ogFieldBlend?.recycle()
+                idleFieldBitmap?.recycle()
                 ogFieldShaderBitmap = null
                 ogOldFieldShaderBitmap = null
                 ogFieldShader = null
@@ -1459,12 +1462,14 @@ class DiffuseWallpaperService : WallpaperService() {
          */
         private fun drawOgDiffuseReal(canvas: Canvas, w: Float, h: Float) {
             ensureOgFields(MusicListenerService.currentAlbumArt)
-            val newField = ogFieldNew
+            val albumField = ogFieldNew?.takeUnless { it.isRecycled }
+            val isIdleField = albumField == null
+            val newField = albumField ?: ensureIdleField()
 
             if (newField == null || newField.isRecycled) {
                 // Some players publish metadata without cover art. Keep the idle state atmospheric
                 // by using a cached, palette-derived wash instead of a single flat color.
-                drawIdleColorField(canvas, w, h)
+                canvas.drawColor(Color.DKGRAY)
                 return
             }
 
@@ -1473,8 +1478,8 @@ class DiffuseWallpaperService : WallpaperService() {
             // bitmap any more: that required a software Canvas, and a software Canvas cannot draw a
             // RuntimeShader, so every fade threw and the frame fell back to the flat background
             // colour for the whole ogFadeSeconds window.
-            val fieldFade = ogFadeProgress
-            val transitioning = fieldFade < 0.999f && ogFieldOld != null && !ogFieldOld!!.isRecycled
+            val fieldFade = if (isIdleField) 1f else ogFadeProgress
+            val transitioning = !isIdleField && fieldFade < 0.999f && ogFieldOld != null && !ogFieldOld!!.isRecycled
             val prevField = if (transitioning) ogFieldOld else null
 
             // Beat-reactive zoom border, eased exactly like the original: border += (target - border)
@@ -1502,30 +1507,60 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
-        private fun drawIdleColorField(canvas: Canvas, w: Float, h: Float) {
+        /** Build a soft, organic palette field once per palette. A multi-stop diagonal gradient
+         * created straight bands across the wallpaper when media metadata had no cover image. */
+        private fun ensureIdleField(): Bitmap? {
             val palette = List(4) { index -> targetColors.getOrElse(index) { Color.DKGRAY } }
-            if (idleFieldGradient == null || idleFieldColors != palette || idleFieldWidth != w || idleFieldHeight != h) {
-                val fieldColors = intArrayOf(
-                    ogDiffuseBackground(palette[0], 0.54f),
-                    ogDiffuseBackground(palette[1], 0.70f),
-                    ogDiffuseBackground(palette[2], 0.48f),
-                    ogDiffuseBackground(palette[3], 0.62f)
-                )
-                idleFieldGradient = LinearGradient(
-                    0f, 0f, w, h,
-                    fieldColors,
-                    floatArrayOf(0f, 0.34f, 0.72f, 1f),
+            val current = idleFieldBitmap
+            if (current != null && !current.isRecycled && idleFieldColors == palette) return current
+
+            current?.recycle()
+            val size = ogFieldPx
+            val bitmap = try {
+                Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            } catch (_: Exception) {
+                idleFieldBitmap = null
+                return null
+            }
+            val fieldCanvas = Canvas(bitmap)
+            fieldCanvas.drawColor(ogDiffuseBackground(palette[0], 0.44f))
+
+            val centers = arrayOf(
+                floatArrayOf(0.20f, 0.20f),
+                floatArrayOf(0.80f, 0.29f),
+                floatArrayOf(0.25f, 0.78f),
+                floatArrayOf(0.82f, 0.82f),
+                floatArrayOf(0.52f, 0.52f)
+            )
+            val shades = intArrayOf(
+                ogDiffuseBackground(palette[0], 0.96f),
+                ogDiffuseBackground(palette[1], 0.90f),
+                ogDiffuseBackground(palette[2], 0.82f),
+                ogDiffuseBackground(palette[3], 0.88f),
+                ogDiffuseBackground(palette[0], 0.72f)
+            )
+            val radius = size * 0.58f
+            for (index in centers.indices) {
+                val cx = centers[index][0] * size
+                val cy = centers[index][1] * size
+                idleFieldPaint.shader = RadialGradient(
+                    cx,
+                    cy,
+                    radius,
+                    intArrayOf(
+                        withAlpha(shades[index], if (index == centers.lastIndex) 135 else 190),
+                        withAlpha(shades[index], 70),
+                        Color.TRANSPARENT
+                    ),
+                    floatArrayOf(0f, 0.56f, 1f),
                     Shader.TileMode.CLAMP
                 )
-                idleFieldColors = palette
-                idleFieldWidth = w
-                idleFieldHeight = h
+                fieldCanvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), idleFieldPaint)
             }
-            idleFieldPaint.shader = idleFieldGradient
-            idleFieldPaint.colorFilter = ogTuneFilter
-            canvas.drawRect(0f, 0f, w, h, idleFieldPaint)
             idleFieldPaint.shader = null
-            idleFieldPaint.colorFilter = null
+            idleFieldBitmap = bitmap
+            idleFieldColors = palette
+            return bitmap
         }
 
         private fun ensureOgBlendBitmap(): Bitmap? {

@@ -48,7 +48,7 @@ class MusicListenerService : NotificationListenerService() {
         @Volatile
         var currentAlbumArt: Bitmap? = null
 
-        private var isHomeVisible = false
+        @Volatile private var isHomeVisible = false
         private var instance: MusicListenerService? = null
 
         private var blockedPackages: Set<String> = emptySet()
@@ -65,8 +65,9 @@ class MusicListenerService : NotificationListenerService() {
         }
 
         fun forceCheck() {
-            instance?.checkMediaSession()
-            instance?.checkActiveNotifications()
+            instance?.let { service ->
+                if (!service.checkMediaSession()) service.checkActiveNotifications()
+            }
         }
 
         fun togglePause() {
@@ -112,6 +113,8 @@ class MusicListenerService : NotificationListenerService() {
         super.onListenerConnected()
         instance = this
         reloadPreferences()
+        if (isHomeVisible) startPolling()
+        forceCheck()
     }
 
     override fun onListenerDisconnected() {
@@ -137,7 +140,7 @@ class MusicListenerService : NotificationListenerService() {
 
     private fun notifyMetadataChangedIfNeeded() {
         val key =
-            "${currentPackageName}|${currentTitle}|${currentArtist}|${currentAlbum}|${currentIsPlaying}|${currentAlbumArt?.hashCode() ?: 0}"
+            "${currentPackageName}|${currentTitle}|${currentArtist}|${currentAlbum}|${currentIsPlaying}|${currentAlbumArt?.hashCode() ?: 0}|${currentColors.joinToString(",")}"
         if (key == lastNotifyKey) return
         lastNotifyKey = key
 
@@ -194,13 +197,12 @@ class MusicListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        if (!isHomeVisible) return
         reloadPreferences()
 
         if (sbn == null) return
         if (!isPackageAllowed(sbn.packageName)) return
 
-        sendBroadcast(Intent(ACTION_SURGE))
+        if (isHomeVisible) sendBroadcast(Intent(ACTION_SURGE).setPackage(packageName))
 
         try {
             // MediaSession is preferred
@@ -261,7 +263,9 @@ class MusicListenerService : NotificationListenerService() {
                     if (bitmap != null && !bitmap.isRecycled) {
                         processBitmapFast(bitmap)
                     }
-                    return title.isNotEmpty()
+                    // A session can have fresh track text but omit its image. Let the notification
+                    // fallback supply artwork in that case so the renderer can recolor immediately.
+                    return title.isNotEmpty() && bitmap != null && !bitmap.isRecycled
                 }
             }
         } catch (e: Exception) {
@@ -350,7 +354,10 @@ class MusicListenerService : NotificationListenerService() {
                             val distinctColors = finalColors.distinct().toMutableList()
                             while (distinctColors.size < 5) distinctColors.add(distinctColors[0])
 
-                            if (currentColors != distinctColors) currentColors = distinctColors
+                            if (currentColors != distinctColors) {
+                                currentColors = distinctColors
+                                notifyMetadataChangedIfNeeded()
+                            }
                         }
                     }
             } catch (e: Exception) {

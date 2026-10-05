@@ -517,7 +517,6 @@ class MainActivity : Activity() {
             }
             receiverRegistered = true
         }
-        MusicListenerService.setHomeState(true)
         MusicListenerService.forceCheck()
         refreshNowPlaying()
         refreshPermissionState()
@@ -531,7 +530,6 @@ class MainActivity : Activity() {
             runCatching { unregisterReceiver(metadataReceiver) }
             receiverRegistered = false
         }
-        MusicListenerService.setHomeState(false)
         super.onStop()
     }
 
