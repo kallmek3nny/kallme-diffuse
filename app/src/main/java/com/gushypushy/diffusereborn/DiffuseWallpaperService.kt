@@ -80,11 +80,7 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float border;
 
             float random(float2 st) {
-                // A compact polynomial hash avoids evaluating sin() hundreds of times for every
-                // output pixel while keeping the noise stable between frames.
-                st = fract(st * float2(123.34, 456.21));
-                st += dot(st, st + 45.32);
-                return fract(st.x * st.y);
+                return fract(sin(dot(st, float2(12.9898, 78.233))) * 43758.5453);
             }
 
             float noise(float2 st) {
@@ -94,9 +90,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 float b = random(i + float2(1.0, 0.0));
                 float c = random(i + float2(0.0, 1.0));
                 float d = random(i + float2(1.0, 1.0));
-                // Quintic interpolation keeps both slope and curvature continuous at cell borders,
-                // preventing the broad diagonal seams that cubic value noise leaves in the warp.
-                float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+                float2 u = f * f * (3.0 - 2.0 * f);
                 return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
             }
 
@@ -105,7 +99,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 float a = 0.5;
                 float2 shift = st * 0.5;
                 float2x2 rot = float2x2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
-                for (int i = 0; i < 5; ++i) {
+                for (int i = 0; i < 3; ++i) {
                     v += a * noise(st);
                     st = rot * st * 1.3 + shift;
                     a *= 0.5;
@@ -120,14 +114,10 @@ class DiffuseWallpaperService : WallpaperService() {
                 } else {
                     uv.y = uv.y / (resolution.x / resolution.y);
                 }
-                // The former domain only spanned a few noise cells over a phone panel, which made
-                // each warp lobe read as a long straight band. More spatial detail keeps the same
-                // slow, fluid movement while breaking up those large shapes.
-                float2 noiseUv = uv * 2.0;
-                float2 q = float2(fbm(noiseUv + float2(timeScaled * 0.1, cos(timeScaled))),
-                                  fbm(noiseUv + float2(timeScaled * 0.1, timeScaled)));
-                float2 r = float2(fbm(0.5 * noiseUv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
-                                  fbm(0.5 * noiseUv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
+                float2 q = float2(fbm(uv + float2(timeScaled * 0.1, cos(timeScaled))),
+                                  fbm(uv + float2(timeScaled * 0.1, timeScaled)));
+                float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
+                                  fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
                 float2 tc = clamp(r, 0.0, 1.0) * fieldRes;
                 half4 col = field.eval(tc);
@@ -145,12 +135,10 @@ class DiffuseWallpaperService : WallpaperService() {
                     col = mix(prev, col, half(m));
                 }
 
-                // Ordered-ish dither. The field is a heavily blurred 300px bitmap upscaled to a full
-                // 1440p panel, so adjacent output pixels resolve to the same 8-bit source value and
-                // the gradient steps become visible bands. Break the quantisation with +/-0.5 LSB of
-                // screen-space noise before the framebuffer rounds to 8-bit.
-                float n = random(fragCoord * 0.7351) + random(fragCoord.yx * 1.1237 + 19.19);
-                float d = (n * 0.5 - 0.5) * (1.6 / 255.0);
+                // Uniform sub-LSB screen-space dither hides the final framebuffer's quantization.
+                // The blur itself stays in float precision so there are no baked-in contour steps.
+                float n = fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));
+                float d = (n - 0.5) / 255.0;
                 return half4(clamp(float3(col.rgb) + float3(d), 0.0, 1.0), 1.0);
             }
         """
@@ -431,9 +419,8 @@ class DiffuseWallpaperService : WallpaperService() {
         private val ogFieldHandler = Handler(Looper.getMainLooper())
         private var ogFieldBuilding: Bitmap? = null
         // Resolution of the soft colour field. The original GL app blurred into a 192px buffer but
-        // sampled it with GL_LINEAR on a full-screen quad; on Canvas we need more headroom because
-        // the 8-bit field is the only source of gradient detail, so a larger buffer plus LINEAR
-        // filtering plus the shader dither is what actually removes the banding.
+        // sampled it with GL_LINEAR on a full-screen quad. Our float field keeps gradient precision,
+        // with linear child sampling and dither at the final framebuffer conversion.
         private val ogFieldPx = 512            // resolution of the soft color field
         private val ogBlendPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
         private val ogBackdropPaint = Paint().apply {
@@ -1355,7 +1342,15 @@ class DiffuseWallpaperService : WallpaperService() {
                 // colour structure of the art while destroying all detail, which is exactly what the
                 // GL app's 8-pass kawaseBlur -> 192px buffer produced.
                 val downSteps = intArrayOf(128, 64, 32, 16, 8)
-                var cur = Bitmap.createScaledBitmap(art, downSteps[0], downSteps[0], true)
+                // Keep the blur in float precision. Repeated 8-bit intermediate passes turned
+                // smooth gradients into contour bands before the warp ever sampled the field.
+                var cur = Bitmap.createBitmap(downSteps[0], downSteps[0], Bitmap.Config.RGBA_F16)
+                Canvas(cur).drawBitmap(
+                    art,
+                    null,
+                    RectF(0f, 0f, downSteps[0].toFloat(), downSteps[0].toFloat()),
+                    Paint(Paint.FILTER_BITMAP_FLAG)
+                )
                 for (i in 1 until downSteps.size) {
                     val next = Bitmap.createScaledBitmap(cur, downSteps[i], downSteps[i], true)
                     if (!cur.isRecycled) cur.recycle()
@@ -1384,7 +1379,7 @@ class DiffuseWallpaperService : WallpaperService() {
          * matching `reSample()` in the original `kawaseBlur.frag` (4 taps at +/- (d+0.5)/res).
          */
         private fun kawaseUpPass(src: Bitmap, size: Int): Bitmap {
-            val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val out = Bitmap.createBitmap(size, size, Bitmap.Config.RGBA_F16)
             val c = Canvas(out)
             val p = Paint().apply {
                 isAntiAlias = true
@@ -1392,6 +1387,13 @@ class DiffuseWallpaperService : WallpaperService() {
                 isDither = true
             }
             val dst = android.graphics.RectF(0f, 0f, size.toFloat(), size.toFloat())
+            // Every tap must cover the entire destination. Translated drawBitmap rectangles left
+            // hard alpha steps at their bounds; the domain warp stretched those into diagonal bars.
+            // CLAMP extends the edge texels just like the original GPU blur's texture sampler.
+            val tapShader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            p.shader = tapShader
+            val tapMatrix = android.graphics.Matrix()
+            val tapScale = size.toFloat() / src.width.toFloat()
             // Offset of one source texel, expressed in destination pixels (the shader's (d+0.5)/res).
             val d = (size.toFloat() / src.width.toFloat()) * 1.5f
             val offsets = arrayOf(
@@ -1403,10 +1405,10 @@ class DiffuseWallpaperService : WallpaperService() {
             for ((i, o) in offsets.withIndex()) {
                 val share = 1f / (i + 1).toFloat()
                 p.alpha = (share * 255f).toInt().coerceIn(0, 255)
-                c.save()
-                c.translate(o[0], o[1])
-                c.drawBitmap(src, null, dst, p)
-                c.restore()
+                tapMatrix.setScale(tapScale, tapScale)
+                tapMatrix.postTranslate(o[0], o[1])
+                tapShader.setLocalMatrix(tapMatrix)
+                c.drawRect(dst, p)
             }
             return out
         }
@@ -1523,7 +1525,7 @@ class DiffuseWallpaperService : WallpaperService() {
             current?.recycle()
             val size = ogFieldPx
             val bitmap = try {
-                Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                Bitmap.createBitmap(size, size, Bitmap.Config.RGBA_F16)
             } catch (_: Exception) {
                 idleFieldBitmap = null
                 return null
@@ -1573,7 +1575,7 @@ class DiffuseWallpaperService : WallpaperService() {
             val existing = ogFieldBlend
             if (existing != null && !existing.isRecycled) return existing
             return try {
-                val b = Bitmap.createBitmap(ogFieldPx, ogFieldPx, Bitmap.Config.ARGB_8888)
+                val b = Bitmap.createBitmap(ogFieldPx, ogFieldPx, Bitmap.Config.RGBA_F16)
                 ogFieldBlend = b
                 ogFieldBlendCanvas = Canvas(b)
                 b
