@@ -94,7 +94,9 @@ class DiffuseWallpaperService : WallpaperService() {
                 float b = random(i + float2(1.0, 0.0));
                 float c = random(i + float2(0.0, 1.0));
                 float d = random(i + float2(1.0, 1.0));
-                float2 u = f * f * (3.0 - 2.0 * f);
+                // Quintic interpolation keeps both slope and curvature continuous at cell borders,
+                // preventing the broad diagonal seams that cubic value noise leaves in the warp.
+                float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
                 return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
             }
 
@@ -103,7 +105,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 float a = 0.5;
                 float2 shift = st * 0.5;
                 float2x2 rot = float2x2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
-                for (int i = 0; i < 3; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     v += a * noise(st);
                     st = rot * st * 1.3 + shift;
                     a *= 0.5;
@@ -118,10 +120,14 @@ class DiffuseWallpaperService : WallpaperService() {
                 } else {
                     uv.y = uv.y / (resolution.x / resolution.y);
                 }
-                float2 q = float2(fbm(uv + float2(timeScaled * 0.1, cos(timeScaled))),
-                                  fbm(uv + float2(timeScaled * 0.1, timeScaled)));
-                float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
-                                  fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
+                // The former domain only spanned a few noise cells over a phone panel, which made
+                // each warp lobe read as a long straight band. More spatial detail keeps the same
+                // slow, fluid movement while breaking up those large shapes.
+                float2 noiseUv = uv * 2.0;
+                float2 q = float2(fbm(noiseUv + float2(timeScaled * 0.1, cos(timeScaled))),
+                                  fbm(noiseUv + float2(timeScaled * 0.1, timeScaled)));
+                float2 r = float2(fbm(0.5 * noiseUv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
+                                  fbm(0.5 * noiseUv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
                 float2 tc = clamp(r, 0.0, 1.0) * fieldRes;
                 half4 col = field.eval(tc);
