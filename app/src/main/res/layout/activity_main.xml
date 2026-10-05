@@ -1,65 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  DiffuseReborn settings.
-
-  This build ships exactly one renderer (the faithful OG Diffuse pipeline), so the render-mode
-  selector, blob/glass/fluid controls, dust, rain, blend modes and shape pickers are all gone.
-  Every control below maps to a preference key that DiffuseEngine.updateSettings() actually reads.
--->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootFrame"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#080A10">
 
     <com.gushypushy.diffusereborn.DiffusePreviewView
         android:id="@+id/previewView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#99000000" />
+        android:background="@drawable/preview_scrim"
+        android:importantForAccessibility="no" />
 
     <ScrollView
         android:id="@+id/mainScroll"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:clipToPadding="false"
         android:fillViewport="true"
-        android:scrollbars="none"
-        android:clipToPadding="false">
+        android:scrollbars="none">
 
         <LinearLayout
             android:id="@+id/mainContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
-            android:paddingTop="56dp"
-            android:paddingBottom="64dp">
-
-            <!-- ===================== HEADER ===================== -->
+            android:paddingStart="22dp"
+            android:paddingTop="26dp"
+            android:paddingEnd="22dp"
+            android:paddingBottom="150dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Diffuse"
-                android:textColor="#FFFFFF"
-                android:textSize="34sp"
-                android:textStyle="bold"
-                android:letterSpacing="-0.02" />
+                android:letterSpacing="0.18"
+                android:text="LIVE WALLPAPER"
+                android:textAllCaps="true"
+                android:textColor="#A9C9FF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:letterSpacing="-0.025"
+                android:text="Diffuse Reborn"
+                android:textColor="#FFF9FBFF"
+                android:textSize="32sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/textRendererCaption"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="OG Diffuse renderer"
-                android:textColor="#8AFFFFFF"
+                android:layout_marginTop="3dp"
+                android:text="Album color, shaped by sound"
+                android:textColor="#B9C3D2"
                 android:textSize="14sp" />
-
-            <!-- ===================== NOW PLAYING ===================== -->
 
             <LinearLayout
                 android:id="@+id/nowPlayingIsland"
@@ -67,51 +70,104 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="22dp"
                 android:background="@drawable/glass_panel"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:padding="14dp">
-
-                <ImageView
-                    android:id="@+id/imgAlbumArt"
-                    android:layout_width="52dp"
-                    android:layout_height="52dp"
-                    android:scaleType="centerCrop"
-                    android:background="@drawable/rounded_art"
-                    android:clipToOutline="true"
-                    android:contentDescription="Album art" />
+                android:orientation="vertical"
+                android:padding="16dp">
 
                 <LinearLayout
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="14dp"
-                    android:orientation="vertical">
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:layout_width="7dp"
+                        android:layout_height="7dp"
+                        android:background="@drawable/live_dot" />
 
                     <TextView
-                        android:id="@+id/textTrackTitle"
-                        android:layout_width="match_parent"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:text="Nothing playing"
-                        android:textColor="#FFFFFF"
-                        android:textSize="15sp"
-                        android:textStyle="bold"
-                        android:maxLines="1"
-                        android:ellipsize="end" />
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:letterSpacing="0.12"
+                        android:text="NOW PLAYING"
+                        android:textAllCaps="true"
+                        android:textColor="#AAB7C9"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
 
                     <TextView
-                        android:id="@+id/textTrackArtist"
-                        android:layout_width="match_parent"
+                        android:id="@+id/textRendererPill"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="1dp"
-                        android:text="Start a song to see it here"
-                        android:textColor="#99FFFFFF"
-                        android:textSize="13sp"
-                        android:maxLines="1"
-                        android:ellipsize="end" />
+                        android:background="@drawable/renderer_pill"
+                        android:paddingStart="9dp"
+                        android:paddingTop="5dp"
+                        android:paddingEnd="9dp"
+                        android:paddingBottom="5dp"
+                        android:text="OG DIFFUSE"
+                        android:textColor="#D8E6FF"
+                        android:textSize="9sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/imgAlbumArt"
+                        android:layout_width="62dp"
+                        android:layout_height="62dp"
+                        android:background="@drawable/rounded_art"
+                        android:clipToOutline="true"
+                        android:contentDescription="Current album artwork"
+                        android:scaleType="centerCrop"
+                        android:src="@drawable/ic_music_placeholder" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="14dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/textTrackTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Nothing playing"
+                            android:textColor="#FFF9FBFF"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/textTrackArtist"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Start music to see its colors here"
+                            android:textColor="#B7C1D0"
+                            android:textSize="13sp" />
+
+                        <LinearLayout
+                            android:id="@+id/paletteSwatches"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="9dp"
+                            android:contentDescription="Colors sampled from the current album artwork"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
-
-            <!-- ===================== SETUP ===================== -->
 
             <TextView
                 style="@style/SectionHeader"
@@ -123,25 +179,17 @@
                     android:id="@+id/textPermissionStatus"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Checking permissions…"
-                    android:textColor="#99FFFFFF"
-                    android:textSize="13sp"
-                    android:lineSpacingExtra="2dp" />
+                    android:lineSpacingExtra="3dp"
+                    android:text="Checking notification access…"
+                    android:textColor="#C4CDDA"
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btnNotifPerm"
                     style="@style/CardButton"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="12dp"
                     android:text="Grant notification access" />
-
-                <Button
-                    android:id="@+id/btnSetWallpaper"
-                    style="@style/CardButtonPrimary"
-                    android:layout_marginTop="10dp"
-                    android:text="Set as live wallpaper" />
             </LinearLayout>
-
-            <!-- ===================== FIELD ===================== -->
 
             <TextView
                 style="@style/SectionHeader"
@@ -151,7 +199,7 @@
 
                 <TextView
                     style="@style/CardCaption"
-                    android:text="The blurred album-art field and the noise that warps it." />
+                    android:text="A blurred wash of album color, slowly reshaped by animated noise." />
 
                 <include
                     android:id="@+id/rowOgScale"
@@ -166,8 +214,6 @@
                     layout="@layout/item_slider" />
             </LinearLayout>
 
-            <!-- ===================== REACTIVITY ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
                 android:text="Reactivity" />
@@ -176,7 +222,7 @@
 
                 <TextView
                     style="@style/CardCaption"
-                    android:text="How hard the field reacts to the beat. Needs audio permission." />
+                    android:text="Audio response is optional. Grant microphone access to let bass move the field." />
 
                 <include
                     android:id="@+id/rowBeat"
@@ -185,9 +231,13 @@
                 <include
                     android:id="@+id/rowOgStrength"
                     layout="@layout/item_slider" />
-            </LinearLayout>
 
-            <!-- ===================== COLOUR ===================== -->
+                <Button
+                    android:id="@+id/btnAudioPermission"
+                    style="@style/CardButton"
+                    android:layout_marginTop="8dp"
+                    android:text="Allow audio response" />
+            </LinearLayout>
 
             <TextView
                 style="@style/SectionHeader"
@@ -208,8 +258,6 @@
                     layout="@layout/item_slider" />
             </LinearLayout>
 
-            <!-- ===================== FINISH ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
                 android:text="Finish" />
@@ -225,8 +273,6 @@
                     layout="@layout/item_slider" />
             </LinearLayout>
 
-            <!-- ===================== ALBUM ART ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
                 android:text="Album art" />
@@ -241,7 +287,8 @@
                     android:id="@+id/groupCenterArt"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    android:visibility="gone">
 
                     <include
                         android:id="@+id/rowCenterSize"
@@ -257,11 +304,9 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- ===================== NOW PLAYING OVERLAY ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
-                android:text="Now Playing overlay" />
+                android:text="Now-playing overlay" />
 
             <LinearLayout style="@style/SettingsCard">
 
@@ -289,8 +334,6 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- ===================== SOURCES ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
                 android:text="Music sources" />
@@ -299,22 +342,20 @@
 
                 <TextView
                     style="@style/CardCaption"
-                    android:text="Choose which apps Diffuse reacts to. Leave both empty to allow every app." />
+                    android:text="Choose which apps Diffuse reacts to. With no allow list, every app is considered." />
 
                 <Button
                     android:id="@+id/btnWhitelist"
                     style="@style/CardButton"
                     android:layout_marginTop="12dp"
-                    android:text="Allowed apps" />
+                    android:text="Allowed apps · All" />
 
                 <Button
                     android:id="@+id/btnBlacklist"
                     style="@style/CardButton"
                     android:layout_marginTop="8dp"
-                    android:text="Blocked apps" />
+                    android:text="Blocked apps · None" />
             </LinearLayout>
-
-            <!-- ===================== SYSTEM ===================== -->
 
             <TextView
                 style="@style/SectionHeader"
@@ -335,8 +376,6 @@
                     layout="@layout/item_switch" />
             </LinearLayout>
 
-            <!-- ===================== PRESETS ===================== -->
-
             <TextView
                 style="@style/SectionHeader"
                 android:text="Presets" />
@@ -356,11 +395,37 @@
 
                 <Button
                     android:id="@+id/btnResetAll"
-                    style="@style/CardButton"
+                    style="@style/CardButtonDestructive"
                     android:layout_marginTop="8dp"
                     android:text="Reset to defaults" />
             </LinearLayout>
-
         </LinearLayout>
     </ScrollView>
+
+    <LinearLayout
+        android:id="@+id/bottomActionBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bottom_action_scrim"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="22dp"
+        android:paddingTop="18dp"
+        android:paddingEnd="22dp"
+        android:paddingBottom="12dp">
+
+        <Button
+            android:id="@+id/btnSetWallpaper"
+            style="@style/CardButtonPrimary"
+            android:text="Set as live wallpaper" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="7dp"
+            android:text="Your changes preview behind these controls"
+            android:textColor="#94A0B2"
+            android:textSize="11sp" />
+    </LinearLayout>
 </FrameLayout>

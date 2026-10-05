@@ -80,9 +80,11 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float border;
 
             float random(float2 st) {
-                float dt = dot(st, float2(12.9898, 78.233));
-                float sn = mod(dt, 3.14);
-                return fract(sin(sn) * 43758.5453);
+                // A compact polynomial hash avoids evaluating sin() hundreds of times for every
+                // output pixel while keeping the noise stable between frames.
+                st = fract(st * float2(123.34, 456.21));
+                st += dot(st, st + 45.32);
+                return fract(st.x * st.y);
             }
 
             float noise(float2 st) {
@@ -154,8 +156,8 @@ class DiffuseWallpaperService : WallpaperService() {
 
         private val choreographer = Choreographer.getInstance()
         private var visualizer: Visualizer? = null
-        private var bassEnergy = 0f
-        private var trebleEnergy = 0f
+        @Volatile private var bassEnergy = 0f
+        @Volatile private var trebleEnergy = 0f
         private lateinit var prefs: SharedPreferences
 
         // --- BLOB CONFIG ---
@@ -388,6 +390,15 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogFieldBlend: Bitmap? = null      // per-frame crossfade composite
         private var ogFieldBlendCanvas: Canvas? = null
         private var ogRuntimeShader: android.graphics.RuntimeShader? = null
+        private var ogFieldShaderBitmap: Bitmap? = null
+        private var ogFieldShader: BitmapShader? = null
+        private var ogOldFieldShaderBitmap: Bitmap? = null
+        private var ogOldFieldShader: BitmapShader? = null
+        private val idleFieldPaint = Paint().apply { isDither = true }
+        private var idleFieldGradient: LinearGradient? = null
+        private var idleFieldColors: List<Int> = emptyList()
+        private var idleFieldWidth = 0f
+        private var idleFieldHeight = 0f
         private val ogFieldPaint = Paint().apply {
             isAntiAlias = true
             isFilterBitmap = true
@@ -540,6 +551,11 @@ class DiffuseWallpaperService : WallpaperService() {
                 ogFieldNew?.recycle()
                 ogFieldOld?.recycle()
                 ogFieldBlend?.recycle()
+                ogFieldShaderBitmap = null
+                ogOldFieldShaderBitmap = null
+                ogFieldShader = null
+                ogOldFieldShader = null
+                ogRuntimeShader = null
             } catch (e: Exception) {}
         }
 
@@ -990,6 +1006,7 @@ class DiffuseWallpaperService : WallpaperService() {
         }
 
         private fun trySetupVisualizer() {
+            if (visualizer != null) return
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
             try {
                 visualizer = Visualizer(0)
@@ -1003,18 +1020,23 @@ class DiffuseWallpaperService : WallpaperService() {
                                 val r = fft[i * 2].toFloat(); val iVal = fft[i * 2 + 1].toFloat();
                                 bassMag += hypot(r, iVal)
                             }
-                            val rawBass = bassMag / 2
-                            if (rawBass > bassEnergy) bassEnergy = (bassEnergy * 0.6f) + (rawBass * 0.4f)
-                            else bassEnergy = (bassEnergy * 0.92f) + (rawBass * 0.08f)
+                            // FFT bytes are signed 8-bit magnitudes. Normalize the band before it
+                            // reaches the zoom control; using the raw 0..128 range made ordinary
+                            // music pin the old 0..1.4 clamp and every track hit with the same pulse.
+                            val rawBass = bassMag / 2f
+                            val targetBass = ((rawBass - 5f) / 72f).coerceIn(0f, 1f)
+                            val bassEase = if (targetBass > bassEnergy) 0.34f else 0.12f
+                            bassEnergy += (targetBass - bassEnergy) * bassEase
 
                             var trebleMag = 0f
                             for (i in 10 until 30) {
                                 val r = fft[i * 2].toFloat(); val iVal = fft[i * 2 + 1].toFloat();
                                 trebleMag += hypot(r, iVal)
                             }
-                            val rawTreble = trebleMag / 20
-                            if (rawTreble > trebleEnergy) trebleEnergy = rawTreble
-                            else trebleEnergy = (trebleEnergy * 0.8f) + (rawTreble * 0.2f)
+                            val rawTreble = trebleMag / 20f
+                            val targetTreble = ((rawTreble - 4f) / 68f).coerceIn(0f, 1f)
+                            val trebleEase = if (targetTreble > trebleEnergy) 0.28f else 0.10f
+                            trebleEnergy += (targetTreble - trebleEnergy) * trebleEase
                         }
                     }
                 }, Visualizer.getMaxCaptureRate() / 2, false, true)
@@ -1023,8 +1045,10 @@ class DiffuseWallpaperService : WallpaperService() {
         }
 
         private fun stopVisualizer() {
-            visualizer?.release()
+            runCatching { visualizer?.release() }
             visualizer = null
+            bassEnergy = 0f
+            trebleEnergy = 0f
         }
 
         private fun drawMarquee(canvas: Canvas, text: String, cx: Float, cy: Float, paint: Paint, maxWidth: Float) {
@@ -1433,18 +1457,14 @@ class DiffuseWallpaperService : WallpaperService() {
          * crossfade between tracks. On API < 33 (no RuntimeShader) it falls back to the same field
          * with an animated drift matrix, which still reads far closer to the original than blobs.
          */
-        private fun drawOgDiffuseReal(canvas: Canvas, w: Float, h: Float, visualProgress: Float) {
+        private fun drawOgDiffuseReal(canvas: Canvas, w: Float, h: Float) {
             ensureOgFields(MusicListenerService.currentAlbumArt)
             val newField = ogFieldNew
 
             if (newField == null || newField.isRecycled) {
-                // No album art yet — fall back to a flat wash of the extracted colour.
-                val bg = lerpColor(
-                    oldColors.getOrElse(0) { Color.DKGRAY },
-                    targetColors.getOrElse(0) { Color.DKGRAY },
-                    visualProgress
-                )
-                canvas.drawColor(bg)
+                // Some players publish metadata without cover art. Keep the idle state atmospheric
+                // by using a cached, palette-derived wash instead of a single flat color.
+                drawIdleColorField(canvas, w, h)
                 return
             }
 
@@ -1482,6 +1502,32 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
+        private fun drawIdleColorField(canvas: Canvas, w: Float, h: Float) {
+            val palette = List(4) { index -> targetColors.getOrElse(index) { Color.DKGRAY } }
+            if (idleFieldGradient == null || idleFieldColors != palette || idleFieldWidth != w || idleFieldHeight != h) {
+                val fieldColors = intArrayOf(
+                    ogDiffuseBackground(palette[0], 0.54f),
+                    ogDiffuseBackground(palette[1], 0.70f),
+                    ogDiffuseBackground(palette[2], 0.48f),
+                    ogDiffuseBackground(palette[3], 0.62f)
+                )
+                idleFieldGradient = LinearGradient(
+                    0f, 0f, w, h,
+                    fieldColors,
+                    floatArrayOf(0f, 0.34f, 0.72f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                idleFieldColors = palette
+                idleFieldWidth = w
+                idleFieldHeight = h
+            }
+            idleFieldPaint.shader = idleFieldGradient
+            idleFieldPaint.colorFilter = ogTuneFilter
+            canvas.drawRect(0f, 0f, w, h, idleFieldPaint)
+            idleFieldPaint.shader = null
+            idleFieldPaint.colorFilter = null
+        }
+
         private fun ensureOgBlendBitmap(): Bitmap? {
             val existing = ogFieldBlend
             if (existing != null && !existing.isRecycled) return existing
@@ -1504,21 +1550,12 @@ class DiffuseWallpaperService : WallpaperService() {
             val shader = ogRuntimeShader ?: android.graphics.RuntimeShader(OG_DIFFUSE_AGSL).also {
                 ogRuntimeShader = it
             }
-            val fieldShader = BitmapShader(field, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-            // BitmapShader defaults to POINT sampling inside a RuntimeShader. The field is only
-            // ogFieldPx across and gets stretched over the whole panel, so point sampling turns every
-            // source texel into a visible flat plateau - that is the banding. Force bilinear.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                fieldShader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
-            }
+            val fieldShader = cachedFieldShader(field, previous = false)
             shader.setInputShader("field", fieldShader)
             // The crossfade partner. AGSL requires every declared child shader to be bound, so when
             // no transition is running we bind the current field to both inputs and set fieldMix = 1.
             val prev = if (oldField != null && !oldField.isRecycled) oldField else field
-            val prevShader = BitmapShader(prev, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                prevShader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
-            }
+            val prevShader = if (prev === field) fieldShader else cachedFieldShader(prev, previous = true)
             shader.setInputShader("fieldOld", prevShader)
             shader.setFloatUniform(
                 "fieldMix",
@@ -1535,6 +1572,27 @@ class DiffuseWallpaperService : WallpaperService() {
             canvas.drawRect(0f, 0f, w, h, ogFieldPaint)
             ogFieldPaint.shader = null
             ogFieldPaint.colorFilter = null
+        }
+
+        /** Reuse the shader wrappers bound to RuntimeShader children instead of allocating two per frame. */
+        private fun cachedFieldShader(bitmap: Bitmap, previous: Boolean): BitmapShader {
+            val cachedBitmap = if (previous) ogOldFieldShaderBitmap else ogFieldShaderBitmap
+            val cachedShader = if (previous) ogOldFieldShader else ogFieldShader
+            if (cachedBitmap === bitmap && cachedShader != null && !bitmap.isRecycled) return cachedShader
+
+            val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            // RuntimeShader child bitmaps otherwise use point sampling and expose the field's texels.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                shader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+            }
+            if (previous) {
+                ogOldFieldShaderBitmap = bitmap
+                ogOldFieldShader = shader
+            } else {
+                ogFieldShaderBitmap = bitmap
+                ogFieldShader = shader
+            }
+            return shader
         }
 
         /**
@@ -2255,7 +2313,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 // This build ships exactly one renderer: the faithful OG Diffuse pipeline (blurred
                 // album-art field domain-warped by animated fbm noise). Everything below is an
                 // optional overlay on top of that field, in draw order.
-                drawOgDiffuseReal(canvas, w, h, visualProgress)
+                drawOgDiffuseReal(canvas, w, h)
 
                 run {
                     // --- CENTER ART ---

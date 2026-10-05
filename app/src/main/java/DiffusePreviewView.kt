@@ -83,9 +83,11 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var isClassicMode = false
     private var isOgDiffuseMode = false
     private var isOgFluidMode = false
-    private var renderModeName = "Liquid Glass"
+    private var renderModeName = "OG Diffuse"
     private var liquidVariant = 0
     private var activeBlobCount = BLOB_COUNT
+    private var ogPreviewScale = 1.0f
+    private var ogPreviewStrength = 1.0f
 
     init {
         for (i in 0 until BLOB_COUNT) {
@@ -159,9 +161,11 @@ class DiffusePreviewView @JvmOverloads constructor(
     }
 
     private fun updateSettings() {
-        userSpeed = 0.0001f + (prefs.getInt("speed", 50).toFloat() / 100f) * 0.08f
-        userSizeMult = 0.7f + (prefs.getInt("size", 50).toFloat() / 100f)
-        userWander = 0.2f + (prefs.getInt("wander", 50).toFloat() / 100f) * 1.5f
+        userSpeed = 0.0001f + (prefs.getInt("og_speed", 50).toFloat() / 100f) * 0.08f
+        userSizeMult = 0.7f + (prefs.getInt("og_scale", 50).toFloat() / 100f)
+        userWander = 1.0f
+        ogPreviewScale = 0.4f + (prefs.getInt("og_scale", 50).toFloat() / 100f) * 1.2f
+        ogPreviewStrength = (prefs.getInt("og_strength", 50).toFloat() / 50f).coerceIn(0f, 2f)
 
         userSat = (prefs.getInt("sat", 50).toFloat() / 50f) * 1.25f
         userBright = (prefs.getInt("bright", 50).toFloat() / 50f) * 1.0f
@@ -183,20 +187,13 @@ class DiffusePreviewView @JvmOverloads constructor(
         }
         blendModeXfermode = if (mode != PorterDuff.Mode.SRC_OVER) PorterDuffXfermode(mode) else null
 
-        renderModeName = prefs.getString("render_mode_name", "Liquid Glass") ?: "Liquid Glass"
-        isClassicMode = renderModeName == "Classic (Legacy)" || renderModeName == "Classic (OG Diffuse)"
-        isOgDiffuseMode = renderModeName == "OG Diffuse"
-        isOgFluidMode = renderModeName == "OG Fluid"
-        liquidVariant = when (renderModeName) {
-            "Aurora Glass" -> 1
-            "Prism Melt" -> 2
-            "Neon Plasma" -> 3
-            "Lava Lamp" -> 4
-            "Ocean Caustics" -> 5
-            "Ink Bloom" -> 6
-            "Chrome Silk" -> 7
-            else -> 0
-        }
+        // The live wallpaper in this build has one renderer. Keep the in-app backdrop on the same
+        // OG Diffuse path even if preferences from an older build contain a retired mode name.
+        renderModeName = "OG Diffuse"
+        isClassicMode = false
+        isOgDiffuseMode = true
+        isOgFluidMode = false
+        liquidVariant = 0
         activeBlobCount = (3 + (prefs.getInt("density", 50).toFloat() / 100f * (BLOB_COUNT - 3))).toInt().coerceIn(3, BLOB_COUNT)
     }
 
@@ -523,14 +520,16 @@ class DiffusePreviewView @JvmOverloads constructor(
         canvas.drawRect(0f, 0f, screenW, screenH, glowPaint)
         glowPaint.shader = null
 
-        val baseAlpha = (userBlobAlpha * 0.44f).toInt().coerceIn(72, 158)
+        val scale = ogPreviewScale.coerceIn(0.4f, 1.6f)
+        val strength = (0.38f + ogPreviewStrength * 0.10f).coerceIn(0.35f, 0.60f)
+        val baseAlpha = (userBlobAlpha * strength).toInt().coerceIn(60, 158)
         val p = time * 0.12f
-        drawOgEllipse(canvas, screenW * (0.18f + sin(p) * 0.035f), screenH * (0.06f + cos(p * 0.8f) * 0.020f), screenW * 0.84f, screenH * 0.42f, light, baseAlpha + 18, 0.44f)
-        drawOgEllipse(canvas, screenW * (0.88f + cos(p * 0.9f) * 0.030f), screenH * (0.18f + sin(p * 0.7f) * 0.030f), screenW * 0.72f, screenH * 0.54f, primary, baseAlpha + 8, 0.50f)
-        drawOgEllipse(canvas, screenW * (0.20f + cos(p * 1.2f) * 0.035f), screenH * (0.56f + sin(p * 0.9f) * 0.028f), screenW * 0.86f, screenH * 0.62f, deep, baseAlpha + 34, 0.48f)
-        drawOgEllipse(canvas, screenW * (0.94f + sin(p * 0.7f) * 0.020f), screenH * (0.76f + cos(p * 1.1f) * 0.026f), screenW * 0.78f, screenH * 0.52f, counter, baseAlpha - 6, 0.54f)
-        drawOgEllipse(canvas, screenW * (0.46f + sin(p * 0.6f) * 0.030f), screenH * (1.06f + cos(p * 0.8f) * 0.018f), screenW * 0.96f, screenH * 0.48f, secondCounter, baseAlpha - 10, 0.58f)
-        drawOgEllipse(canvas, screenW * (0.54f + cos(p * 1.4f) * 0.025f), screenH * (0.36f + sin(p * 1.0f) * 0.030f), screenW * 0.58f, screenH * 0.34f, glow, baseAlpha - 18, 0.42f)
+        drawOgEllipse(canvas, screenW * (0.18f + sin(p) * 0.035f), screenH * (0.06f + cos(p * 0.8f) * 0.020f), screenW * 0.84f * scale, screenH * 0.42f * scale, light, baseAlpha + 18, 0.44f)
+        drawOgEllipse(canvas, screenW * (0.88f + cos(p * 0.9f) * 0.030f), screenH * (0.18f + sin(p * 0.7f) * 0.030f), screenW * 0.72f * scale, screenH * 0.54f * scale, primary, baseAlpha + 8, 0.50f)
+        drawOgEllipse(canvas, screenW * (0.20f + cos(p * 1.2f) * 0.035f), screenH * (0.56f + sin(p * 0.9f) * 0.028f), screenW * 0.86f * scale, screenH * 0.62f * scale, deep, baseAlpha + 34, 0.48f)
+        drawOgEllipse(canvas, screenW * (0.94f + sin(p * 0.7f) * 0.020f), screenH * (0.76f + cos(p * 1.1f) * 0.026f), screenW * 0.78f * scale, screenH * 0.52f * scale, counter, baseAlpha - 6, 0.54f)
+        drawOgEllipse(canvas, screenW * (0.46f + sin(p * 0.6f) * 0.030f), screenH * (1.06f + cos(p * 0.8f) * 0.018f), screenW * 0.96f * scale, screenH * 0.48f * scale, secondCounter, baseAlpha - 10, 0.58f)
+        drawOgEllipse(canvas, screenW * (0.54f + cos(p * 1.4f) * 0.025f), screenH * (0.36f + sin(p * 1.0f) * 0.030f), screenW * 0.58f * scale, screenH * 0.34f * scale, glow, baseAlpha - 18, 0.42f)
     }
 
     private fun drawOgRibbon(
