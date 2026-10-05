@@ -1,0 +1,34 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Local IDE and Kotlin state
+.idea/
+.kotlin/
+.remember/
+
+# Scratch screenshots and UI hierarchy dumps (see CLAUDE.md)
+/*.png
+/after_set_wallpaper.xml
+/diffuse_picker.xml
+
+# Dated build and source snapshots kept outside the app source tree
+/app/src/main/*.apk
+/app/src/main/*.txt
+/app/src/main/merge.py
+
+# Unrelated Spotify instrumentation experiments (see CLAUDE.md)
+/SpotifyResilientHook*.java
+/spotify_premium_bypass*.js

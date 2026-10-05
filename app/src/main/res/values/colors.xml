@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="samsung_blue">#3E91FF</color>
+    <color name="oneui_bg_dark">#000000</color>
+    <color name="oneui_surface_dark">#181818</color>
+    <color name="oneui_text_primary">#FFFFFF</color>
+    <color name="oneui_text_secondary">#999999</color>
+    <color name="switch_track_off">#383838</color>
+
+    <!-- Glassmorphism Palette -->
+    <color name="glass_white_10">#1AFFFFFF</color>
+    <color name="glass_white_20">#33FFFFFF</color>
+    <color name="glass_white_30">#4DFFFFFF</color>
+    <color name="glass_border">#2AFFFFFF</color>
+    <color name="premium_accent">#5E97FF</color>
+    <color name="premium_accent_dim">#3D5A80</color>
+
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background" android:gravity="center_vertical">
+        <shape>
+            <solid android:color="@color/switch_track_off"/>
+            <corners android:radius="100dp"/>
+            <size android:height="16dp"/>
+        </shape>
+    </item>
+    <item android:id="@android:id/progress" android:gravity="center_vertical">
+        <scale android:scaleWidth="100%">
+            <shape>
+                <solid android:color="@color/samsung_blue"/>
+                <corners android:radius="100dp"/>
+                <size android:height="16dp"/>
+            </shape>
+        </scale>
+    </item>
+</layer-list>

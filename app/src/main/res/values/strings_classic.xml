@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Labels matching the original Diffuse settings UI, so the Classic GUI reads the same.
+  Sourced from the decompiled app's strings.xml (label_* / button_* / text_* families).
+-->
+<resources>
+    <string name="label_configuration">Configuration</string>
+    <string name="label_graphics_settings">Graphics Settings</string>
+    <string name="label_fluid_scale">Fluid Scale</string>
+    <string name="label_speed_min_max">Speed (Min - Max)</string>
+    <string name="label_strength">Strength</string>
+    <string name="label_last_playing">Last Playing</string>
+    <string name="label_setup">Setup</string>
+
+    <string name="button_allow_read_notification">Allow Reading Notification</string>
+    <string name="button_set_wallpaper">Set Wallpaper</string>
+    <string name="button_open_music_application">Open Music Application</string>
+    <string name="button_debug_view">Debug View</string>
+    <string name="button_preserve_album_color_after_pause">Preserve after music pause</string>
+    <string name="button_preserve_album_color_after_restart">Preserve after phone reboot</string>
+
+    <string name="label_classic_gui">Classic GUI</string>
+    <string name="label_no_track">Nothing playing</string>
+</resources>

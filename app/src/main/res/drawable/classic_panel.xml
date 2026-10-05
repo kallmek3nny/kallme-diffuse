@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Classic skin panel. Mirrors the original Diffuse `layout_main_frag_config.xml` card:
+  cardBackgroundColor=@color/transparent, cardElevation=0dp, strokeColor=colorOnSurface,
+  strokeWidth=2dp. No fill, no blur, no glow - just a hard 2dp outline over the wallpaper.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="2dp"
+        android:color="#FFFFFFFF" />
+    <corners android:radius="4dp" />
+</shape>

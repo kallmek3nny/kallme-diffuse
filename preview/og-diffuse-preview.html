@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OG Diffuse Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101318;
+      --panel: rgba(255, 255, 255, 0.08);
+      --panel-strong: rgba(255, 255, 255, 0.13);
+      --line: rgba(255, 255, 255, 0.18);
+      --text: #f5f7fb;
+      --muted: #9ba7b7;
+      --accent: #90c8ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 20% 0%, #25313c 0, transparent 32%), var(--bg);
+      color: var(--text);
+      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(280px, 390px) minmax(320px, 1fr);
+      gap: 28px;
+      align-items: start;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .phone {
+      width: min(100%, 390px);
+      aspect-ratio: 9 / 19.5;
+      border-radius: 36px;
+      padding: 10px;
+      background: linear-gradient(145deg, #242a32, #090b0e);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: 28px;
+      background: #15191f;
+    }
+
+    .controls {
+      display: grid;
+      gap: 16px;
+    }
+
+    .title {
+      margin: 0 0 4px;
+      font-size: 28px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0 0 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      max-width: 660px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 16px;
+      backdrop-filter: blur(18px);
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      font-weight: 760;
+      color: var(--accent);
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .swatches {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button,
+    label.upload {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      color: var(--text);
+      padding: 9px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover,
+    label.upload:hover {
+      border-color: rgba(144, 200, 255, 0.65);
+      background: rgba(144, 200, 255, 0.14);
+    }
+
+    button.active {
+      border-color: rgba(144, 200, 255, 0.9);
+      background: rgba(144, 200, 255, 0.22);
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 130px minmax(160px, 1fr) 52px;
+      gap: 12px;
+      align-items: center;
+      margin: 10px 0;
+    }
+
+    .row span:first-child {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .value {
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      font-size: 14px;
+    }
+
+    .palette {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .chip {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 8px;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        grid-template-columns: 1fr;
+        padding: 18px;
+      }
+
+      .phone {
+        margin: 0 auto;
+      }
+
+      .row {
+        grid-template-columns: 110px minmax(120px, 1fr) 46px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="phone" aria-label="Phone wallpaper preview">
+      <canvas id="preview" width="1080" height="2340"></canvas>
+    </section>
+
+    <section class="controls">
+      <div>
+        <h1 class="title">OG Diffuse Preview</h1>
+        <p class="subtitle">Local canvas mock for the Android renderer. Upload cover art or use a sample palette, then compare the soft color-field behavior before pushing anything to a phone.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Cover Art</h2>
+        <label class="upload">
+          Upload album art
+          <input id="file" type="file" accept="image/*">
+        </label>
+        <div class="palette" id="palette"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Sample Palettes</h2>
+        <div class="swatches" id="samples"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Mode</h2>
+        <div class="swatches" id="modes">
+          <button class="active" type="button" data-mode="soft">OG Diffuse</button>
+          <button type="button" data-mode="fluid">OG Fluid</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Render Tuning</h2>
+        <div class="row">
+          <span>Saturation</span>
+          <input id="sat" type="range" min="40" max="110" value="64">
+          <span class="value" id="satValue">64</span>
+        </div>
+        <div class="row">
+          <span>Brightness</span>
+          <input id="bright" type="range" min="42" max="92" value="66">
+          <span class="value" id="brightValue">66</span>
+        </div>
+        <div class="row">
+          <span>Alpha</span>
+          <input id="alpha" type="range" min="110" max="220" value="178">
+          <span class="value" id="alphaValue">178</span>
+        </div>
+        <div class="row">
+          <span>Motion</span>
+          <input id="motion" type="range" min="0" max="100" value="42">
+          <span class="value" id="motionValue">42</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("preview");
+    const ctx = canvas.getContext("2d");
+    const paletteView = document.getElementById("palette");
+    const sampleRoot = document.getElementById("samples");
+    const modeRoot = document.getElementById("modes");
+    const fileInput = document.getElementById("file");
+    const controls = {
+      sat: document.getElementById("sat"),
+      bright: document.getElementById("bright"),
+      alpha: document.getElementById("alpha"),
+      motion: document.getElementById("motion")
+    };
+
+    const samples = [
+      { name: "Blue album", colors: ["#17649d", "#70b9df", "#0c334c", "#a8c04f", "#273146"] },
+      { name: "Coral cyan", colors: ["#ce5949", "#f49c86", "#245f98", "#72d7c8", "#2b243d"] },
+      { name: "Cafe kit", colors: ["#d6a33f", "#f0ddaa", "#2c8b94", "#d64e69", "#536057"] },
+      { name: "Pink red", colors: ["#e94b6b", "#ffc0c9", "#212a44", "#40b9c2", "#6e325e"] },
+      { name: "Warm dark", colors: ["#b84930", "#f2bd68", "#1e2432", "#5a95b7", "#24131a"] }
+    ];
+
+    let palette = samples[0].colors.map(hexToRgb);
+    let mode = "soft";
+    let uploadedImage = null;
+    let uploadedTiny = null;
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function hexToRgb(hex) {
+      const n = Number.parseInt(hex.replace("#", ""), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    function rgbToCss(c, a = 1) {
+      return `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, ${a})`;
+    }
+
+    function rgbToHsv(c) {
+      const r = c.r / 255;
+      const g = c.g / 255;
+      const b = c.b / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      let h = 0;
+      if (d !== 0) {
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      return { h, s: max === 0 ? 0 : d / max, v: max };
+    }
+
+    function hsvToRgb(hsv) {
+      const h = ((hsv.h % 360) + 360) % 360;
+      const s = clamp(hsv.s, 0, 1);
+      const v = clamp(hsv.v, 0, 1);
+      const c = v * s;
+      const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+      const m = v - c;
+      let r = 0, g = 0, b = 0;
+      if (h < 60) [r, g, b] = [c, x, 0];
+      else if (h < 120) [r, g, b] = [x, c, 0];
+      else if (h < 180) [r, g, b] = [0, c, x];
+      else if (h < 240) [r, g, b] = [0, x, c];
+      else if (h < 300) [r, g, b] = [x, 0, c];
+      else [r, g, b] = [c, 0, x];
+      return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
+    }
+
+    function applyTuning(c) {
+      return hsvToRgb({
+        ...rgbToHsv(c),
+        s: rgbToHsv(c).s * (Number(controls.sat.value) / 50) * 1.25,
+        v: rgbToHsv(c).v * (Number(controls.bright.value) / 50)
+      });
+    }
+
+    function ogColor(c, index) {
+      const shifts = [0, 14, -18, 138, -126, 34, 176];
+      const hsv = rgbToHsv(applyTuning(c));
+      const accent = index >= 3;
+      hsv.h = hsv.h + shifts[index % shifts.length];
+      hsv.s = clamp(hsv.s * (accent ? 0.92 : 1.18), accent ? 0.30 : 0.34, 0.94);
+      hsv.v = clamp(hsv.v * (accent ? 1.18 : 1.10), accent ? 0.28 : 0.24, 0.96);
+      return hsvToRgb(hsv);
+    }
+
+    function ogBackground(c, darken) {
+      const hsv = rgbToHsv(ogColor(c, 0));
+      hsv.s = clamp(hsv.s * 0.82, 0.18, 0.72);
+      hsv.v = clamp(hsv.v * darken, 0.16, 0.62);
+      return hsvToRgb(hsv);
+    }
+
+    function drawEllipse(cx, cy, rx, ry, color, alpha, falloff) {
+      const radius = Math.max(1, rx);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(1, ry / radius);
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+      gradient.addColorStop(0, rgbToCss(color, clamp(alpha, 0, 255) / 255));
+      gradient.addColorStop(clamp(falloff, 0.28, 0.72), rgbToCss(color, clamp(alpha * 0.42, 0, 255) / 255));
+      gradient.addColorStop(1, rgbToCss(color, 0));
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawRibbon(yNorm, color, alpha, phase, thickness) {
+      const w = canvas.width;
+      const h = canvas.height;
+      const y = h * yNorm;
+      const gradient = ctx.createLinearGradient(0, y - thickness, w, y + thickness);
+      gradient.addColorStop(0, rgbToCss(color, 0));
+      gradient.addColorStop(0.28, rgbToCss(color, clamp(alpha, 0, 255) / 255));
+      gradient.addColorStop(0.70, rgbToCss(color, clamp(alpha * 0.62, 0, 255) / 255));
+      gradient.addColorStop(1, rgbToCss(color, 0));
+
+      ctx.save();
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = thickness;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(-w * 0.24, y + Math.sin(phase) * h * 0.055);
+      ctx.bezierCurveTo(
+        w * 0.08,
+        y - h * (0.09 + Math.sin(phase * 0.7) * 0.026),
+        w * 0.34,
+        y + h * (0.13 + Math.cos(phase * 0.9) * 0.030),
+        w * 0.58,
+        y + Math.sin(phase + 1.1) * h * 0.070
+      );
+      ctx.bezierCurveTo(
+        w * 0.78,
+        y - h * (0.15 + Math.cos(phase * 0.8) * 0.026),
+        w * 1.02,
+        y + h * (0.10 + Math.sin(phase * 1.1) * 0.024),
+        w * 1.24,
+        y + Math.cos(phase) * h * 0.045
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function render(now) {
+      const w = canvas.width;
+      const h = canvas.height;
+      const t = now * 0.001 * (Number(controls.motion.value) / 50);
+      const p = t * 0.12;
+      const [rawBg, rawBg2, rawBg3, raw4, raw5] = palette;
+      const primary = ogColor(rawBg, 0);
+      const light = ogColor(rawBg2, 1);
+      const deep = ogColor(rawBg3, 2);
+      const counter = ogColor(rawBg, 3);
+      const secondCounter = ogColor(rawBg2, 4);
+      const glow = ogColor(raw5, 5);
+      const fluid = mode === "fluid";
+
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, rgbToCss(ogBackground(rawBg, fluid ? 0.70 : 0.82)));
+      bg.addColorStop(0.54, rgbToCss(ogBackground(rawBg2, fluid ? 0.56 : 0.66)));
+      bg.addColorStop(1, rgbToCss(ogBackground(rawBg3, fluid ? 0.72 : 0.78)));
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      if (uploadedTiny) {
+        ctx.save();
+        ctx.globalAlpha = fluid ? 0.16 : 0.22;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(uploadedTiny, 0, 0, w, h);
+        ctx.restore();
+      }
+
+      const wash = ctx.createLinearGradient(0, h * 0.08, w, h);
+      wash.addColorStop(0, rgbToCss(light, 0.27));
+      wash.addColorStop(0.48, rgbToCss(light, 0));
+      wash.addColorStop(1, rgbToCss(counter, 0.31));
+      ctx.fillStyle = wash;
+      ctx.fillRect(0, 0, w, h);
+
+      if (fluid) {
+        const fp = t * 0.20;
+        const baseAlpha = clamp(Number(controls.alpha.value) * 0.38, 62, 138);
+        drawEllipse(w * (0.10 + Math.sin(fp * 0.55) * 0.035), h * 0.10, w * 0.76, h * 0.40, light, baseAlpha + 10, 0.42);
+        drawEllipse(w * (1.02 + Math.cos(fp * 0.50) * 0.025), h * 0.28, w * 0.66, h * 0.48, primary, baseAlpha + 2, 0.46);
+        drawEllipse(w * (0.18 + Math.cos(fp * 0.68) * 0.028), h * 0.78, w * 0.84, h * 0.48, secondCounter, baseAlpha - 10, 0.54);
+        drawRibbon(0.18, light, baseAlpha + 36, fp + 0.2, h * 0.24);
+        drawRibbon(0.36, counter, baseAlpha + 18, fp + 1.6, h * 0.30);
+        drawRibbon(0.56, deep, baseAlpha + 44, fp + 3.0, h * 0.34);
+        drawRibbon(0.75, primary, baseAlpha + 28, fp + 4.4, h * 0.28);
+        drawRibbon(0.92, glow, baseAlpha + 6, fp + 5.7, h * 0.24);
+        const sheen = ctx.createLinearGradient(w * 0.10, 0, w * 0.92, h);
+        sheen.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+        sheen.addColorStop(0.48, "rgba(255, 255, 255, 0)");
+        sheen.addColorStop(1, "rgba(255, 255, 255, 0.055)");
+        ctx.fillStyle = sheen;
+        ctx.fillRect(0, 0, w, h);
+      } else {
+        const baseAlpha = clamp(Number(controls.alpha.value) * 0.44, 72, 158);
+        drawEllipse(w * (0.18 + Math.sin(p) * 0.035), h * (0.06 + Math.cos(p * 0.8) * 0.020), w * 0.84, h * 0.42, light, baseAlpha + 18, 0.44);
+        drawEllipse(w * (0.88 + Math.cos(p * 0.9) * 0.030), h * (0.18 + Math.sin(p * 0.7) * 0.030), w * 0.72, h * 0.54, primary, baseAlpha + 8, 0.50);
+        drawEllipse(w * (0.20 + Math.cos(p * 1.2) * 0.035), h * (0.56 + Math.sin(p * 0.9) * 0.028), w * 0.86, h * 0.62, deep, baseAlpha + 34, 0.48);
+        drawEllipse(w * (0.94 + Math.sin(p * 0.7) * 0.020), h * (0.76 + Math.cos(p * 1.1) * 0.026), w * 0.78, h * 0.52, counter, baseAlpha - 6, 0.54);
+        drawEllipse(w * (0.46 + Math.sin(p * 0.6) * 0.030), h * (1.06 + Math.cos(p * 0.8) * 0.018), w * 0.96, h * 0.48, secondCounter, baseAlpha - 10, 0.58);
+        drawEllipse(w * (0.54 + Math.cos(p * 1.4) * 0.025), h * (0.36 + Math.sin(p * 1.0) * 0.030), w * 0.58, h * 0.34, glow, baseAlpha - 18, 0.42);
+      }
+
+      const vignette = ctx.createRadialGradient(w / 2, h * 0.48, h * 0.16, w / 2, h / 2, h * 0.78);
+      vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+      vignette.addColorStop(1, "rgba(0, 0, 0, 0.20)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, w, h);
+
+      requestAnimationFrame(render);
+    }
+
+    function updatePaletteView() {
+      paletteView.innerHTML = "";
+      palette.forEach(color => {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.style.background = rgbToCss(color);
+        paletteView.appendChild(chip);
+      });
+    }
+
+    function selectSample(index) {
+      uploadedImage = null;
+      uploadedTiny = null;
+      palette = samples[index].colors.map(hexToRgb);
+      [...sampleRoot.children].forEach((button, i) => button.classList.toggle("active", i === index));
+      updatePaletteView();
+    }
+
+    function quantizeImage(image) {
+      const small = document.createElement("canvas");
+      small.width = 96;
+      small.height = 96;
+      const sctx = small.getContext("2d");
+      sctx.drawImage(image, 0, 0, small.width, small.height);
+      const data = sctx.getImageData(0, 0, small.width, small.height).data;
+      const bins = new Map();
+      for (let i = 0; i < data.length; i += 16) {
+        const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
+        const hsv = rgbToHsv(c);
+        if (hsv.v < 0.08 || hsv.v > 0.96) continue;
+        const key = `${c.r >> 4},${c.g >> 4},${c.b >> 4}`;
+        const bin = bins.get(key) || { r: 0, g: 0, b: 0, count: 0, score: 0 };
+        bin.r += c.r;
+        bin.g += c.g;
+        bin.b += c.b;
+        bin.count += 1;
+        bin.score += hsv.s * (1 - Math.abs(hsv.v - 0.52) * 0.45);
+        bins.set(key, bin);
+      }
+      const colors = [...bins.values()]
+        .map(bin => ({
+          r: bin.r / bin.count,
+          g: bin.g / bin.count,
+          b: bin.b / bin.count,
+          score: bin.count * bin.score
+        }))
+        .sort((a, b) => b.score - a.score);
+
+      const picked = [];
+      for (const color of colors) {
+        const hsv = rgbToHsv(color);
+        const distinct = picked.every(existing => {
+          const other = rgbToHsv(existing);
+          const hueDistance = Math.min(Math.abs(hsv.h - other.h), 360 - Math.abs(hsv.h - other.h));
+          return hueDistance > 14 || Math.abs(hsv.v - other.v) > 0.16;
+        });
+        if (distinct) picked.push(color);
+        if (picked.length === 5) break;
+      }
+      while (picked.length < 5) {
+        picked.push(hsvToRgb({ ...rgbToHsv(picked[0] || hexToRgb("#4d86b7")), h: rgbToHsv(picked[0] || hexToRgb("#4d86b7")).h + picked.length * 46 }));
+      }
+      return picked;
+    }
+
+    function makeTinyImage(image) {
+      const tiny = document.createElement("canvas");
+      tiny.width = 8;
+      tiny.height = 8;
+      const tctx = tiny.getContext("2d");
+      tctx.drawImage(image, 0, 0, 8, 8);
+      const smooth = document.createElement("canvas");
+      smooth.width = 72;
+      smooth.height = 72;
+      const sctx = smooth.getContext("2d");
+      sctx.imageSmoothingEnabled = true;
+      sctx.drawImage(tiny, 0, 0, 72, 72);
+      return smooth;
+    }
+
+    samples.forEach((sample, index) => {
+      const button = document.createElement("button");
+      button.textContent = sample.name;
+      button.type = "button";
+      button.addEventListener("click", () => selectSample(index));
+      sampleRoot.appendChild(button);
+    });
+
+    modeRoot.addEventListener("click", event => {
+      const button = event.target.closest("button[data-mode]");
+      if (!button) return;
+      mode = button.dataset.mode;
+      [...modeRoot.children].forEach(child => child.classList.toggle("active", child === button));
+    });
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      const image = new Image();
+      image.onload = () => {
+        uploadedImage = image;
+        uploadedTiny = makeTinyImage(image);
+        palette = quantizeImage(image);
+        [...sampleRoot.children].forEach(button => button.classList.remove("active"));
+        updatePaletteView();
+      };
+      image.src = URL.createObjectURL(file);
+    });
+
+    Object.entries(controls).forEach(([key, input]) => {
+      const value = document.getElementById(`${key}Value`);
+      input.addEventListener("input", () => {
+        value.textContent = input.value;
+      });
+    });
+
+    selectSample(0);
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

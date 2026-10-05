@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Classic skin divider: the original `layout_line.xml` was a 1dp colorOnSurface bar at 0.6 alpha. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#99FFFFFF" />
+</shape>
