@@ -81,6 +81,9 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float scale;
             uniform float border;
             uniform float2 artMotion;
+            uniform float bass;
+            uniform float mids;
+            uniform float highs;
 
             float random(float2 st) {
                 return fract(sin(dot(st, float2(12.9898, 78.233))) * 43758.5453);
@@ -127,8 +130,24 @@ class DiffuseWallpaperService : WallpaperService() {
                 float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
                                   fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
+
+                // A tiny radial elastic deformation makes bass hits feel physical instead of
+                // simply zooming the whole frame. The amplitude stays deliberately subtle.
+                float2 centered = r - float2(0.5, 0.5);
+                float radial = length(centered);
+                float elasticWave = 0.5 + 0.5 * sin(radial * 13.0 - timeScaled * 2.1);
+                centered *= 1.0 + bass * (0.018 + 0.022 * elasticWave);
+                r = centered + float2(0.5, 0.5);
+
+                // Sample a nearby version of the same colour field and fold it back into the
+                // primary sample. This creates depth without another expensive noise octave.
+                float2 depthR = clamp(r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035), 0.0, 1.0);
                 float2 tc = clamp(r, 0.0, 1.0) * fieldRes;
+                float2 depthTc = depthR * fieldRes;
+                float depthMix = 0.10 + mids * 0.09;
                 half4 col = field.eval(tc);
+                half4 depthCol = field.eval(depthTc);
+                col = mix(col, depthCol, half(depthMix));
 
                 // Track-change crossfade, applied inside the warp instead of as a pre-pass. The
                 // pre-pass composited both fields into an intermediate bitmap, which required a
@@ -138,16 +157,29 @@ class DiffuseWallpaperService : WallpaperService() {
                 // already agree, snap to the target; only genuinely different regions ease across.
                 if (fieldMix < 0.999) {
                     half4 prev = fieldOld.eval(tc);
+                    half4 prevDepth = fieldOld.eval(depthTc);
+                    prev = mix(prev, prevDepth, half(depthMix));
                     float fdiff = length(float3(prev.rgb) - float3(col.rgb));
                     float m = clamp(max(fieldMix, min(0.01 / max(fdiff, 0.0001), 1.0)), 0.0, 1.0);
                     col = mix(prev, col, half(m));
                 }
 
+                // Gentle colour shaping after the warp: a small saturation lift, soft contrast,
+                // and restrained highlight bloom. This keeps album identity while avoiding muddy washes.
+                float3 rgb = float3(col.rgb);
+                float luminance = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+                float saturation = 1.06 + highs * 0.08;
+                rgb = mix(float3(luminance), rgb, saturation);
+                rgb = (rgb - float3(0.5)) * (1.03 + mids * 0.025) + float3(0.5);
+                rgb = clamp(rgb, 0.0, 1.0);
+                float bloom = smoothstep(0.62, 0.94, luminance) * (0.025 + highs * 0.025);
+                rgb = 1.0 - (1.0 - rgb) * (1.0 - bloom);
+
                 // Uniform sub-LSB screen-space dither hides the final framebuffer's quantization.
                 // The blur itself stays in float precision so there are no baked-in contour steps.
                 float n = fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));
                 float d = (n - 0.5) / 255.0;
-                return half4(clamp(float3(col.rgb) + float3(d), 0.0, 1.0), 1.0);
+                return half4(clamp(rgb + float3(d), 0.0, 1.0), 1.0);
             }
         """
     }
@@ -1812,6 +1844,9 @@ class DiffuseWallpaperService : WallpaperService() {
             // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
             shader.setFloatUniform("scale", ogUserScale + midWarp)
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
+            shader.setFloatUniform("bass", if (isBeatZonesEnabled) bassEnergy.coerceIn(0f, 1f) else 0f)
+            shader.setFloatUniform("mids", if (isBeatZonesEnabled) midEnergy.coerceIn(0f, 1f) else 0f)
+            shader.setFloatUniform("highs", if (isBeatZonesEnabled) trebleEnergy.coerceIn(0f, 1f) else 0f)
             ogFieldPaint.shader = shader
             ogFieldPaint.colorFilter = ogTuneFilter
             canvas.drawRect(0f, 0f, w, h, ogFieldPaint)
