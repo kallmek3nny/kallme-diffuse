@@ -1,0 +1,73 @@
+name: Apply battery optimization
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-battery-optimization.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-render-loop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch render loop
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt")
+          text = path.read_text(encoding="utf-8")
+
+          old1 = '''            if (surgeProgress > 0.01f) {
+              surgeProgress *= 0.94f
+            } else {
+              surgeProgress = 0f
+            }'''
+          new1 = '''            // Battery optimization: preserve the old visual decay rate while reducing callback wakeups.
+            if (surgeProgress > 0.01f) {
+              val dtSec = dtMs / 1000f
+              val refreshHz = TARGET_FPS.coerceIn(30f, 240f)
+              surgeProgress *= 0.94f.pow(dtSec * refreshHz)
+              if (surgeProgress <= 0.01f) surgeProgress = 0f
+            } else {
+              surgeProgress = 0f
+            }'''
+
+          old2 = '''            if (isVisible) {
+              choreographer.postFrameCallback(this)
+            }'''
+          new2 = '''            // Battery optimization: sleep until the next target frame instead of waking on every display vsync.
+            if (isVisible) {
+              val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+              if (remainingNs >= 1_000_000L) {
+                choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+              } else {
+                choreographer.postFrameCallback(this)
+              }
+            }'''
+
+          if old1 not in text:
+              raise SystemExit("surgeProgress target block not found exactly")
+          if old2 not in text:
+              raise SystemExit("frame callback target block not found exactly")
+          if text.count(old1) != 1 or text.count(old2) != 1:
+              raise SystemExit("expected exactly one match for each target block")
+
+          text = text.replace(old1, new1, 1).replace(old2, new2, 1)
+          path.write_text(text, encoding="utf-8")
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt
+          git commit -m "perf: reduce wallpaper frame callback wakeups"
+          git push origin HEAD:main
