@@ -101,6 +101,11 @@ class MainActivity : Activity() {
     private val switchSettings = listOf(
         SwitchSetting(R.id.rowCenterArt, "center_art_on", "Center artwork", "Show the current cover in the wallpaper.", groupId = R.id.groupCenterArt),
         SwitchSetting(R.id.rowWidget, "widget_on", "Now-playing overlay", "Show the track title and artist.", defaultValue = true, groupId = R.id.groupWidget),
+        SwitchSetting(R.id.rowAdaptiveFps, "adaptive_fps", "Adaptive frame rate", "Run at full smoothness while active, then drop to 30 or 15 FPS when the wallpaper is calm.", defaultValue = true),
+        SwitchSetting(R.id.rowArtMotion, "art_motion", "Artwork motion", "Use each cover's contrast and color balance to subtly shape drift speed and direction.", defaultValue = true),
+        SwitchSetting(R.id.rowBeatZones, "beat_zones", "Frequency zones", "Bass controls zoom, mids shape the warp, and highs add grain and edge shimmer.", defaultValue = true),
+        SwitchSetting(R.id.rowBatteryIntelligence, "battery_intelligence", "Battery intelligence", "Automatically reduce render load on low battery or Android power saver, then restore it while charging.", defaultValue = true),
+        SwitchSetting(R.id.rowEdgeGlow, "edge_glow", "Edge glow", "Bleed album colors around the display edges and pulse them with the music.", defaultValue = true),
         SwitchSetting(R.id.rowPowerSaver, "power_saver", "Power saver", "Limit wallpaper rendering to 30 frames per second."),
         SwitchSetting(R.id.rowForceDark, "force_dark_icons", "Dark system icons", "Use dark launcher icons when supported."),
         SwitchSetting(R.id.rowDebug, "debug_mode", "Show frame rate", "Display renderer frame rate on the wallpaper.")

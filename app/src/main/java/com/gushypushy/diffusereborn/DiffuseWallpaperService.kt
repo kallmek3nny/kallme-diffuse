@@ -24,9 +24,11 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.audiofx.Visualizer
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.service.wallpaper.WallpaperService
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -78,6 +80,7 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float timeScaled;
             uniform float scale;
             uniform float border;
+            uniform float2 artMotion;
 
             float random(float2 st) {
                 return fract(sin(dot(st, float2(12.9898, 78.233))) * 43758.5453);
@@ -114,6 +117,11 @@ class DiffuseWallpaperService : WallpaperService() {
                 } else {
                     uv.y = uv.y / (resolution.x / resolution.y);
                 }
+                float2 artOffset = float2(
+                    artMotion.x * sin(timeScaled * 0.73 + 0.8),
+                    artMotion.y * cos(timeScaled * 0.61 + 1.1)
+                );
+                uv += artOffset;
                 float2 q = float2(fbm(uv + float2(timeScaled * 0.1, cos(timeScaled))),
                                   fbm(uv + float2(timeScaled * 0.1, timeScaled)));
                 float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
@@ -151,6 +159,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private val choreographer = Choreographer.getInstance()
         private var visualizer: Visualizer? = null
         @Volatile private var bassEnergy = 0f
+        @Volatile private var midEnergy = 0f
         @Volatile private var trebleEnergy = 0f
         private lateinit var prefs: SharedPreferences
 
@@ -181,6 +190,31 @@ class DiffuseWallpaperService : WallpaperService() {
                         stopDrawing()
                     }
                 }
+            }
+        }
+
+        // --- BATTERY INTELLIGENCE ---
+        private var batteryPercent = 100
+        private var batteryCharging = false
+        private var systemPowerSaveMode = false
+        private val batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_BATTERY_CHANGED -> {
+                        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                        if (level >= 0 && scale > 0) {
+                            batteryPercent = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+                        }
+                        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+                        batteryCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                                status == BatteryManager.BATTERY_STATUS_FULL
+                    }
+                    PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                        systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+                    }
+                }
+                updateTargetFrameRate(force = true)
             }
         }
 
@@ -310,6 +344,11 @@ class DiffuseWallpaperService : WallpaperService() {
         private var isForceDarkIcons = false
         private var isDebug = false
         private var isDoubleTapEnabled = false
+        private var isAdaptiveFpsEnabled = true
+        private var isArtworkMotionEnabled = true
+        private var isBeatZonesEnabled = true
+        private var isBatteryIntelligenceEnabled = true
+        private var isEdgeGlowEnabled = true
 
         // TUNING VARS
         private var userHue = 0f
@@ -409,6 +448,13 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
         private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
         private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
+        private data class ArtworkMotionProfile(val speed: Float, val biasX: Float, val biasY: Float)
+        private var artworkMotionSpeed = 1f
+        private var artworkMotionTargetSpeed = 1f
+        private var artworkMotionBiasX = 0f
+        private var artworkMotionBiasY = 0f
+        private var artworkMotionTargetBiasX = 0f
+        private var artworkMotionTargetBiasY = 0f
         // Album-art field crossfade, on its own clock (see ensureOgFields). 0 = fully old field,
         // 1 = fully new. Advances in real seconds so the fade is the same length on any refresh rate.
         private var ogFadeProgress = 1f
@@ -428,6 +474,14 @@ class DiffuseWallpaperService : WallpaperService() {
             isFilterBitmap = true
             isDither = true
         }
+        private val edgeGlowTopPaint = Paint().apply { isDither = true }
+        private val edgeGlowRightPaint = Paint().apply { isDither = true }
+        private val edgeGlowBottomPaint = Paint().apply { isDither = true }
+        private val edgeGlowLeftPaint = Paint().apply { isDither = true }
+        private var edgeGlowWidth = 0
+        private var edgeGlowHeight = 0
+        private var edgeGlowPaletteHash = Int.MIN_VALUE
+        private var edgeGlowDepth = 0f
         private val ogOverlayPaint = Paint().apply {
             isAntiAlias = false
             isDither = true
@@ -466,7 +520,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var time = 0f
         private val hsvCache = FloatArray(3)
 
-        private var TARGET_FPS = 120f
+        private var TARGET_FPS = 60f
         private var frameIntervalNs = (1_000_000_000L / TARGET_FPS).toLong()
         private val slowMotionFactor = 0.25f
         private var lastFrameTimeNs = System.nanoTime()
@@ -492,6 +546,7 @@ class DiffuseWallpaperService : WallpaperService() {
             try {
                 prefs = getSharedPreferences("diffuse_prefs", Context.MODE_PRIVATE)
                 prefs.registerOnSharedPreferenceChangeListener(this)
+                systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
                 updateSettings()
                 createBaseBlob()
 
@@ -513,13 +568,19 @@ class DiffuseWallpaperService : WallpaperService() {
                     addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_SCREEN_OFF)
                 }
+                val batteryFilter = IntentFilter().apply {
+                    addAction(Intent.ACTION_BATTERY_CHANGED)
+                    addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                }
 
                 if (Build.VERSION.SDK_INT >= 33) {
                     registerReceiver(surgeReceiver, filter, Context.RECEIVER_EXPORTED)
                     registerReceiver(screenReceiver, screenFilter, Context.RECEIVER_EXPORTED)
+                    registerReceiver(batteryReceiver, batteryFilter, Context.RECEIVER_EXPORTED)
                 } else {
                     registerReceiver(surgeReceiver, filter)
                     registerReceiver(screenReceiver, screenFilter)
+                    registerReceiver(batteryReceiver, batteryFilter)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -531,6 +592,7 @@ class DiffuseWallpaperService : WallpaperService() {
             try {
                 unregisterReceiver(surgeReceiver)
                 unregisterReceiver(screenReceiver)
+                unregisterReceiver(batteryReceiver)
                 prefs.unregisterOnSharedPreferenceChangeListener(this)
                 stopVisualizer()
                 stopDrawing()
@@ -897,7 +959,12 @@ class DiffuseWallpaperService : WallpaperService() {
             centerArtScale = 0.5f + (prefs.getInt("center_size", 50).toFloat() / 50f)
             lastProcessedArt = null
 
-            // --- System ---
+            // --- Smart rendering / system ---
+            isAdaptiveFpsEnabled = prefs.getBoolean("adaptive_fps", true)
+            isArtworkMotionEnabled = prefs.getBoolean("art_motion", true)
+            isBeatZonesEnabled = prefs.getBoolean("beat_zones", true)
+            isBatteryIntelligenceEnabled = prefs.getBoolean("battery_intelligence", true)
+            isEdgeGlowEnabled = prefs.getBoolean("edge_glow", true)
             isPowerSaver = prefs.getBoolean("power_saver", false)
             isDebug = prefs.getBoolean("debug_mode", false)
 
@@ -922,16 +989,46 @@ class DiffuseWallpaperService : WallpaperService() {
                 notifyColorsChanged()
             }
 
-            TARGET_FPS = if (isPowerSaver) 30f else 60f
-            frameIntervalNs = (1_000_000_000L / TARGET_FPS).toLong()
+            edgeGlowPaletteHash = Int.MIN_VALUE
+            updateTargetFrameRate(force = true)
+        }
 
+
+        private fun desiredFrameRate(): Float {
+            var cap = if (isPowerSaver) 30f else 60f
+            if (isBatteryIntelligenceEnabled && !batteryCharging) {
+                cap = when {
+                    systemPowerSaveMode || batteryPercent <= 10 -> min(cap, 20f)
+                    batteryPercent <= 20 -> min(cap, 30f)
+                    else -> cap
+                }
+            }
+            if (!isAdaptiveFpsEnabled) return cap
+
+            val activeAudio = MusicListenerService.currentIsPlaying ||
+                    bassEnergy > 0.035f || midEnergy > 0.035f || trebleEnergy > 0.035f
+            val activeVisual = ogFadeProgress < 0.999f || fadeProgress < 0.999f ||
+                    surgeProgress > 0.01f || isTouching
+            val desired = when {
+                activeAudio || activeVisual -> cap
+                MusicListenerService.currentAlbumArt != null -> min(cap, 30f)
+                else -> min(cap, 15f)
+            }
+            return desired.coerceAtLeast(15f)
+        }
+
+        private fun updateTargetFrameRate(force: Boolean = false) {
+            val desired = desiredFrameRate()
+            if (!force && abs(desired - TARGET_FPS) < 0.5f) return
+            TARGET_FPS = desired
+            frameIntervalNs = (1_000_000_000L / TARGET_FPS).toLong()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
-                    val s = surfaceHolder.surface
-                    if (s != null && s.isValid) {
-                        s.setFrameRate(TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                    val surface = surfaceHolder.surface
+                    if (surface != null && surface.isValid) {
+                        surface.setFrameRate(TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                     }
-                } catch (e: Exception) {}
+                } catch (_: Exception) {}
             }
         }
 
@@ -951,7 +1048,7 @@ class DiffuseWallpaperService : WallpaperService() {
             val dtNs = frameTimeNanos - lastFrameTimeNs
             lastFrameTimeNs = frameTimeNanos
 
-            val dtMs = (dtNs.toFloat() / 1_000_000f).coerceIn(0f, 50f)
+            val dtMs = (dtNs.toFloat() / 1_000_000f).coerceIn(0f, 100f)
             time += userSpeed * (dtMs / 16.6667f) * slowMotionFactor
 
             // OG Diffuse noise clock, matching the original Player.java exactly:
@@ -967,7 +1064,16 @@ class DiffuseWallpaperService : WallpaperService() {
                 if (ogFadeProgress < 1f) {
                     ogFadeProgress = (ogFadeProgress + dtSec / ogFadeSeconds).coerceAtMost(1f)
                 }
-                val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) * ogUserSpeed
+                val hasArtwork = MusicListenerService.currentAlbumArt != null
+                val motionSpeedTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetSpeed else 1f
+                val motionBiasXTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetBiasX else 0f
+                val motionBiasYTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetBiasY else 0f
+                val motionEase = (dtSec * 2.2f).coerceIn(0f, 1f)
+                artworkMotionSpeed += (motionSpeedTarget - artworkMotionSpeed) * motionEase
+                artworkMotionBiasX += (motionBiasXTarget - artworkMotionBiasX) * motionEase
+                artworkMotionBiasY += (motionBiasYTarget - artworkMotionBiasY) * motionEase
+                val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) *
+                        ogUserSpeed * artworkMotionSpeed
                 ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE
                 ogNoiseClock += dtSec * ogSpeedEased
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
@@ -982,6 +1088,8 @@ class DiffuseWallpaperService : WallpaperService() {
             } else {
                 surgeProgress = 0f
             }
+
+            updateTargetFrameRate()
 
             if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= frameIntervalNs) {
                 draw()
@@ -1020,7 +1128,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 visualizer?.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                     override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
                     override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-                        if (fft != null && fft.size > 10) {
+                        if (fft != null && fft.size > 60) {
                             var bassMag = 0f
                             for (i in 1 until 3) {
                                 val r = fft[i * 2].toFloat(); val iVal = fft[i * 2 + 1].toFloat();
@@ -1033,6 +1141,16 @@ class DiffuseWallpaperService : WallpaperService() {
                             val targetBass = ((rawBass - 5f) / 72f).coerceIn(0f, 1f)
                             val bassEase = if (targetBass > bassEnergy) 0.34f else 0.12f
                             bassEnergy += (targetBass - bassEnergy) * bassEase
+
+                            var midMag = 0f
+                            for (i in 3 until 10) {
+                                val r = fft[i * 2].toFloat(); val iVal = fft[i * 2 + 1].toFloat()
+                                midMag += hypot(r, iVal)
+                            }
+                            val rawMid = midMag / 7f
+                            val targetMid = ((rawMid - 4f) / 70f).coerceIn(0f, 1f)
+                            val midEase = if (targetMid > midEnergy) 0.30f else 0.11f
+                            midEnergy += (targetMid - midEnergy) * midEase
 
                             var trebleMag = 0f
                             for (i in 10 until 30) {
@@ -1054,6 +1172,7 @@ class DiffuseWallpaperService : WallpaperService() {
             runCatching { visualizer?.release() }
             visualizer = null
             bassEnergy = 0f
+            midEnergy = 0f
             trebleEnergy = 0f
         }
 
@@ -1445,6 +1564,67 @@ class DiffuseWallpaperService : WallpaperService() {
          *  - The original app faded the field over a fixed wall-clock duration, independent of any
          *    colour easing.
          */
+
+        private fun analyzeArtworkMotion(art: Bitmap): ArtworkMotionProfile {
+            var sample: Bitmap? = null
+            return try {
+                val size = 24
+                val scaled = Bitmap.createScaledBitmap(art, size, size, true)
+                sample = scaled
+                val pixels = IntArray(size * size)
+                scaled.getPixels(pixels, 0, size, 0, 0, size, size)
+                val lumas = FloatArray(pixels.size)
+                var lumaSum = 0f
+                var saturationSum = 0f
+                var weightSum = 0f
+                var weightedX = 0f
+                var weightedY = 0f
+                var index = 0
+                for (y in 0 until size) {
+                    for (x in 0 until size) {
+                        val color = pixels[index]
+                        val r = Color.red(color) / 255f
+                        val g = Color.green(color) / 255f
+                        val b = Color.blue(color) / 255f
+                        val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
+                        val maxChannel = maxOf(r, g, b)
+                        val minChannel = minOf(r, g, b)
+                        val saturation = if (maxChannel > 0.0001f) (maxChannel - minChannel) / maxChannel else 0f
+                        lumas[index] = luma
+                        lumaSum += luma
+                        saturationSum += saturation
+                        val weight = 0.08f + luma + saturation * 0.25f
+                        weightSum += weight
+                        weightedX += x * weight
+                        weightedY += y * weight
+                        index++
+                    }
+                }
+                val mean = lumaSum / pixels.size
+                var variance = 0f
+                for (value in lumas) {
+                    val delta = value - mean
+                    variance += delta * delta
+                }
+                variance /= pixels.size
+                val contrast = (variance * 8f).coerceIn(0f, 1f)
+                val averageSaturation = (saturationSum / pixels.size).coerceIn(0f, 1f)
+                val complexity = (contrast * 0.62f + averageSaturation * 0.38f).coerceIn(0f, 1f)
+                val cx = if (weightSum > 0f) weightedX / weightSum / (size - 1f) else 0.5f
+                val cy = if (weightSum > 0f) weightedY / weightSum / (size - 1f) else 0.5f
+                ArtworkMotionProfile(
+                    speed = 0.88f + complexity * 0.28f,
+                    biasX = ((cx - 0.5f) * 0.12f).coerceIn(-0.07f, 0.07f),
+                    biasY = ((cy - 0.5f) * 0.12f).coerceIn(-0.07f, 0.07f)
+                )
+            } catch (_: Exception) {
+                ArtworkMotionProfile(1f, 0f, 0f)
+            } finally {
+                val scaled = sample
+                if (scaled != null && scaled !== art && !scaled.isRecycled) scaled.recycle()
+            }
+        }
+
         private fun ensureOgFields(art: Bitmap?) {
             if (art == null || art.isRecycled) return
             if (ogFieldSource === art && ogFieldNew != null && !ogFieldNew!!.isRecycled) return
@@ -1456,9 +1636,13 @@ class DiffuseWallpaperService : WallpaperService() {
             // before the new field appeared. While the build runs we keep drawing the current field.
             ogFieldBuilding = art
             ogFieldExecutor.execute {
+                val motionProfile = analyzeArtworkMotion(art)
                 val next = buildOgField(art)
                 ogFieldHandler.post {
                     ogFieldBuilding = null
+                    artworkMotionTargetSpeed = motionProfile.speed
+                    artworkMotionTargetBiasX = motionProfile.biasX
+                    artworkMotionTargetBiasY = motionProfile.biasY
                     if (next == null) return@post
                     if (art.isRecycled) { next.recycle(); return@post }
                     ogFieldOld?.let { if (it !== ogFieldNew && !it.isRecycled) it.recycle() }
@@ -1617,8 +1801,15 @@ class DiffuseWallpaperService : WallpaperService() {
             shader.setFloatUniform("resolution", w, h)
             shader.setFloatUniform("fieldRes", ogFieldPx.toFloat(), ogFieldPx.toFloat())
             shader.setFloatUniform("timeScaled", ogNoiseClock)
+            shader.setFloatUniform(
+                "artMotion",
+                if (isArtworkMotionEnabled) artworkMotionBiasX else 0f,
+                if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
+            )
+            // Bass keeps the original zoom, mids gently change field scale, highs feed grain/edge shimmer.
+            val midWarp = if (isBeatZonesEnabled) midEnergy * 0.08f else 0f
             // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
-            shader.setFloatUniform("scale", ogUserScale)
+            shader.setFloatUniform("scale", ogUserScale + midWarp)
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
             ogFieldPaint.shader = shader
             ogFieldPaint.colorFilter = ogTuneFilter
@@ -1702,8 +1893,12 @@ class DiffuseWallpaperService : WallpaperService() {
         private fun drawOgFieldFallback(canvas: Canvas, w: Float, h: Float, field: Bitmap) {
             // No RuntimeShader: upscale the blurred field to fill, with a slow drift + beat zoom so it
             // still breathes like the original liquid wash.
-            val drift = time * 0.06f
-            val zoom = 1.18f + ogBorderEased * 0.10f
+            val fallbackMotionSpeed = if (isArtworkMotionEnabled) artworkMotionSpeed else 1f
+            val fallbackBiasX = if (isArtworkMotionEnabled) artworkMotionBiasX else 0f
+            val fallbackBiasY = if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
+            val midZoom = if (isBeatZonesEnabled) midEnergy * 0.025f else 0f
+            val drift = time * 0.06f * fallbackMotionSpeed
+            val zoom = 1.18f + ogBorderEased * 0.10f + midZoom
             val fw = ogFieldPx.toFloat()
             val fh = ogFieldPx.toFloat()
             ogFieldMatrix.reset()
@@ -1714,8 +1909,8 @@ class DiffuseWallpaperService : WallpaperService() {
             val extraX = fw * sx - w
             val extraY = fh * sy - h
             ogFieldMatrix.postTranslate(
-                -extraX * (0.5f + 0.5f * sin(drift)),
-                -extraY * (0.5f + 0.5f * cos(drift * 0.8f))
+                -extraX * (0.5f + 0.5f * sin(drift + fallbackBiasX * 8f)),
+                -extraY * (0.5f + 0.5f * cos(drift * 0.8f + fallbackBiasY * 8f))
             )
             val shader = BitmapShader(field, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
             shader.setLocalMatrix(ogFieldMatrix)
@@ -2148,7 +2343,8 @@ class DiffuseWallpaperService : WallpaperService() {
          * frame, scaled by the "grain" setting. Driven by [userGrainOpacity].
          */
         private fun drawOgGrain(canvas: Canvas, w: Float, h: Float) {
-            val grainAlpha = (userGrainOpacity * 20f).toInt().coerceIn(0, 28)
+            val highFrequencyBoost = if (isBeatZonesEnabled) trebleEnergy * 8f else 0f
+            val grainAlpha = (userGrainOpacity * 20f + highFrequencyBoost).toInt().coerceIn(0, 28)
             if (grainAlpha <= 0) return
             glassFillPaint.shader = null
             glassFillPaint.xfermode = null
@@ -2160,6 +2356,45 @@ class DiffuseWallpaperService : WallpaperService() {
                 val r = 0.45f + (i % 4) * 0.18f
                 canvas.drawCircle(x, y, r, glassFillPaint)
             }
+        }
+
+
+        private fun ensureEdgeGlowShaders(w: Float, h: Float) {
+            val paletteHash = targetColors.hashCode()
+            val width = w.toInt()
+            val height = h.toInt()
+            if (edgeGlowWidth == width && edgeGlowHeight == height && edgeGlowPaletteHash == paletteHash) return
+            edgeGlowWidth = width
+            edgeGlowHeight = height
+            edgeGlowPaletteHash = paletteHash
+            edgeGlowDepth = min(w, h) * 0.13f
+            val top = applyTuning(targetColors.getOrElse(0) { Color.WHITE })
+            val right = applyTuning(targetColors.getOrElse(1) { top })
+            val bottom = applyTuning(targetColors.getOrElse(2) { right })
+            val left = applyTuning(targetColors.getOrElse(3) { top })
+            fun transparent(color: Int) = Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
+            edgeGlowTopPaint.shader = LinearGradient(0f, 0f, 0f, edgeGlowDepth, top, transparent(top), Shader.TileMode.CLAMP)
+            edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - edgeGlowDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)
+            edgeGlowBottomPaint.shader = LinearGradient(0f, h, 0f, h - edgeGlowDepth, bottom, transparent(bottom), Shader.TileMode.CLAMP)
+            edgeGlowLeftPaint.shader = LinearGradient(0f, 0f, edgeGlowDepth, 0f, left, transparent(left), Shader.TileMode.CLAMP)
+        }
+
+        private fun drawEdgeGlow(canvas: Canvas, w: Float, h: Float) {
+            if (!isEdgeGlowEnabled) return
+            if (isBatteryIntelligenceEnabled && !batteryCharging && batteryPercent <= 5) return
+            ensureEdgeGlowShaders(w, h)
+            val high = if (isBeatZonesEnabled) trebleEnergy else 0f
+            val pulse = (bassEnergy * userBeatPulse * 0.35f + high * 0.75f).coerceIn(0f, 1f)
+            val alpha = (34f + pulse * 86f).toInt().coerceIn(24, 120)
+            edgeGlowTopPaint.alpha = alpha
+            edgeGlowRightPaint.alpha = alpha
+            edgeGlowBottomPaint.alpha = alpha
+            edgeGlowLeftPaint.alpha = alpha
+            val depth = edgeGlowDepth
+            canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)
+            canvas.drawRect(w - depth, 0f, w, h, edgeGlowRightPaint)
+            canvas.drawRect(0f, h - depth, w, h, edgeGlowBottomPaint)
+            canvas.drawRect(0f, 0f, depth, h, edgeGlowLeftPaint)
         }
 
         private fun drawVignetteLayer(canvas: Canvas) {
@@ -2318,7 +2553,7 @@ class DiffuseWallpaperService : WallpaperService() {
                     fadeProgress = 0.0f
                 }
                 if (fadeProgress < 1.0f) {
-                    fadeProgress += userFadeSpeed
+                    fadeProgress += (ogLastDtSec / ogFadeSeconds).coerceAtLeast(0f)
                     if (fadeProgress > 1.0f) fadeProgress = 1.0f
                 }
 
@@ -2403,6 +2638,7 @@ class DiffuseWallpaperService : WallpaperService() {
                     // are gone along with their settings.
                     drawOgGrain(canvas, w, h)
                     drawVignetteLayer(canvas)
+                    drawEdgeGlow(canvas, w, h)
 
                     if (isWidgetEnabled) {
                         val widgetX = (w * userPosX); val widgetY = (h * userPosY)
@@ -2413,7 +2649,7 @@ class DiffuseWallpaperService : WallpaperService() {
                             artFadeProgress = 0f
                         }
                         if (artFadeProgress < 1.0f) {
-                            artFadeProgress += 0.02f
+                            artFadeProgress += ogLastDtSec * 1.2f
                             if (artFadeProgress > 1.0f) artFadeProgress = 1.0f
                         } else {
                             oldArt = null

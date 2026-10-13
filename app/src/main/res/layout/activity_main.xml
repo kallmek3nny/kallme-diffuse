@@ -359,6 +359,32 @@
 
             <TextView
                 style="@style/SectionHeader"
+                android:text="Smart rendering" />
+
+            <LinearLayout style="@style/SettingsCard">
+
+                <include
+                    android:id="@+id/rowAdaptiveFps"
+                    layout="@layout/item_switch" />
+
+                <include
+                    android:id="@+id/rowArtMotion"
+                    layout="@layout/item_switch" />
+
+                <include
+                    android:id="@+id/rowBeatZones"
+                    layout="@layout/item_switch" />
+
+                <include
+                    android:id="@+id/rowBatteryIntelligence"
+                    layout="@layout/item_switch" />
+
+                <include
+                    android:id="@+id/rowEdgeGlow"
+                    layout="@layout/item_switch" />
+            </LinearLayout>
+            <TextView
+                style="@style/SectionHeader"
                 android:text="System" />
 
             <LinearLayout style="@style/SettingsCard">
