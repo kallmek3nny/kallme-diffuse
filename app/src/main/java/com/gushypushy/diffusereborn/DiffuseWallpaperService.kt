@@ -973,8 +973,12 @@ class DiffuseWallpaperService : WallpaperService() {
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
             }
 
+            // Battery optimization: preserve the visual decay while reducing callback wakeups.
             if (surgeProgress > 0.01f) {
-                surgeProgress *= 0.94f
+                val dtSec = dtMs / 1000f
+                val refreshHz = TARGET_FPS.coerceIn(30f, 240f)
+                surgeProgress *= 0.94f.pow(dtSec * refreshHz)
+                if (surgeProgress <= 0.01f) surgeProgress = 0f
             } else {
                 surgeProgress = 0f
             }
@@ -984,8 +988,14 @@ class DiffuseWallpaperService : WallpaperService() {
                 lastDrawTimeNs = frameTimeNanos
             }
 
+            // Battery optimization: sleep until the next target frame instead of waking on every display vsync.
             if (isVisible) {
-                choreographer.postFrameCallback(this)
+                val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                if (remainingNs >= 1_000_000L) {
+                    choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                } else {
+                    choreographer.postFrameCallback(this)
+                }
             }
         }
 
