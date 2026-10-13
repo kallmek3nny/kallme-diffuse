@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-build-${{ github.ref }}
@@ -25,6 +25,685 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply smart rendering features
+        if: github.event_name == 'push'
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if new in text:
+                  return text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          wallpaper_path = Path("app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt")
+          activity_path = Path("app/src/main/java/com/gushypushy/diffusereborn/MainActivity.kt")
+          layout_path = Path("app/src/main/res/layout/activity_main.xml")
+
+          wallpaper = wallpaper_path.read_text(encoding="utf-8")
+          activity = activity_path.read_text(encoding="utf-8")
+          layout = layout_path.read_text(encoding="utf-8")
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''import android.os.Build
+          import android.os.Handler
+          import android.os.Looper''',
+              '''import android.os.BatteryManager
+          import android.os.Build
+          import android.os.Handler
+          import android.os.Looper
+          import android.os.PowerManager''',
+              "battery imports",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            uniform float scale;
+                      uniform float border;''',
+              '''            uniform float scale;
+                      uniform float border;
+                      uniform float2 artMotion;''',
+              "art motion uniform",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                }
+                          float2 q = float2''',
+              '''                }
+                          float2 artOffset = float2(
+                              artMotion.x * sin(timeScaled * 0.73 + 0.8),
+                              artMotion.y * cos(timeScaled * 0.61 + 1.1)
+                          );
+                          uv += artOffset;
+                          float2 q = float2''',
+              "art motion shader offset",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private var visualizer: Visualizer? = null
+                  @Volatile private var bassEnergy = 0f
+                  @Volatile private var trebleEnergy = 0f
+                  private lateinit var prefs: SharedPreferences''',
+              '''        private var visualizer: Visualizer? = null
+                  @Volatile private var bassEnergy = 0f
+                  @Volatile private var midEnergy = 0f
+                  @Volatile private var trebleEnergy = 0f
+                  private lateinit var prefs: SharedPreferences''',
+              "mid energy field",
+          )
+
+          old_screen = '''        // --- SCREEN RECEIVER ---
+                  private val screenReceiver = object : BroadcastReceiver() {
+                      override fun onReceive(context: Context?, intent: Intent?) {
+                          when (intent?.action) {
+                              Intent.ACTION_SCREEN_ON -> {
+                                  startDrawing()
+                                  MusicListenerService.forceCheck()
+                              }
+                              Intent.ACTION_SCREEN_OFF -> {
+                                  stopDrawing()
+                              }
+                          }
+                      }
+                  }
+          '''
+          new_screen = old_screen + '''
+                  // --- BATTERY INTELLIGENCE ---
+                  private var batteryPercent = 100
+                  private var batteryCharging = false
+                  private var systemPowerSaveMode = false
+                  private val batteryReceiver = object : BroadcastReceiver() {
+                      override fun onReceive(context: Context?, intent: Intent?) {
+                          when (intent?.action) {
+                              Intent.ACTION_BATTERY_CHANGED -> {
+                                  val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                                  val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                                  if (level >= 0 && scale > 0) {
+                                      batteryPercent = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+                                  }
+                                  val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+                                  batteryCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                                          status == BatteryManager.BATTERY_STATUS_FULL
+                              }
+                              PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                                  systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+                              }
+                          }
+                          updateTargetFrameRate(force = true)
+                      }
+                  }
+          '''
+          wallpaper = replace_once(wallpaper, old_screen, new_screen, "battery receiver")
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private var isDebug = false
+                  private var isDoubleTapEnabled = false''',
+              '''        private var isDebug = false
+                  private var isDoubleTapEnabled = false
+                  private var isAdaptiveFpsEnabled = true
+                  private var isArtworkMotionEnabled = true
+                  private var isBeatZonesEnabled = true
+                  private var isBatteryIntelligenceEnabled = true
+                  private var isEdgeGlowEnabled = true''',
+              "smart rendering settings fields",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
+                  private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
+                  private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom''',
+              '''        private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
+                  private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
+                  private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
+                  private data class ArtworkMotionProfile(val speed: Float, val biasX: Float, val biasY: Float)
+                  private var artworkMotionSpeed = 1f
+                  private var artworkMotionTargetSpeed = 1f
+                  private var artworkMotionBiasX = 0f
+                  private var artworkMotionBiasY = 0f
+                  private var artworkMotionTargetBiasX = 0f
+                  private var artworkMotionTargetBiasY = 0f''',
+              "artwork motion fields",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private val ogBackdropPaint = Paint().apply {
+                      isAntiAlias = true
+                      isFilterBitmap = true
+                      isDither = true
+                  }
+                  private val ogOverlayPaint = Paint().apply {''',
+              '''        private val ogBackdropPaint = Paint().apply {
+                      isAntiAlias = true
+                      isFilterBitmap = true
+                      isDither = true
+                  }
+                  private val edgeGlowTopPaint = Paint().apply { isDither = true }
+                  private val edgeGlowRightPaint = Paint().apply { isDither = true }
+                  private val edgeGlowBottomPaint = Paint().apply { isDither = true }
+                  private val edgeGlowLeftPaint = Paint().apply { isDither = true }
+                  private var edgeGlowWidth = 0
+                  private var edgeGlowHeight = 0
+                  private var edgeGlowPaletteHash = Int.MIN_VALUE
+                  private var edgeGlowDepth = 0f
+                  private val ogOverlayPaint = Paint().apply {''',
+              "edge glow cache fields",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private var TARGET_FPS = 120f''',
+              '''        private var TARGET_FPS = 60f''',
+              "initial target fps",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                prefs = getSharedPreferences("diffuse_prefs", Context.MODE_PRIVATE)
+                          prefs.registerOnSharedPreferenceChangeListener(this)
+                          updateSettings()''',
+              '''                prefs = getSharedPreferences("diffuse_prefs", Context.MODE_PRIVATE)
+                          prefs.registerOnSharedPreferenceChangeListener(this)
+                          systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+                          updateSettings()''',
+              "initial power state",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                val screenFilter = IntentFilter().apply {
+                              addAction(Intent.ACTION_SCREEN_ON)
+                              addAction(Intent.ACTION_SCREEN_OFF)
+                          }
+          
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              registerReceiver(surgeReceiver, filter, Context.RECEIVER_EXPORTED)
+                              registerReceiver(screenReceiver, screenFilter, Context.RECEIVER_EXPORTED)
+                          } else {
+                              registerReceiver(surgeReceiver, filter)
+                              registerReceiver(screenReceiver, screenFilter)
+                          }''',
+              '''                val screenFilter = IntentFilter().apply {
+                              addAction(Intent.ACTION_SCREEN_ON)
+                              addAction(Intent.ACTION_SCREEN_OFF)
+                          }
+                          val batteryFilter = IntentFilter().apply {
+                              addAction(Intent.ACTION_BATTERY_CHANGED)
+                              addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                          }
+          
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              registerReceiver(surgeReceiver, filter, Context.RECEIVER_EXPORTED)
+                              registerReceiver(screenReceiver, screenFilter, Context.RECEIVER_EXPORTED)
+                              registerReceiver(batteryReceiver, batteryFilter, Context.RECEIVER_EXPORTED)
+                          } else {
+                              registerReceiver(surgeReceiver, filter)
+                              registerReceiver(screenReceiver, screenFilter)
+                              registerReceiver(batteryReceiver, batteryFilter)
+                          }''',
+              "battery receiver registration",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                unregisterReceiver(surgeReceiver)
+                          unregisterReceiver(screenReceiver)
+                          prefs.unregisterOnSharedPreferenceChangeListener(this)''',
+              '''                unregisterReceiver(surgeReceiver)
+                          unregisterReceiver(screenReceiver)
+                          unregisterReceiver(batteryReceiver)
+                          prefs.unregisterOnSharedPreferenceChangeListener(this)''',
+              "battery receiver cleanup",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            // --- System ---
+                      isPowerSaver = prefs.getBoolean("power_saver", false)
+                      isDebug = prefs.getBoolean("debug_mode", false)''',
+              '''            // --- Smart rendering / system ---
+                      isAdaptiveFpsEnabled = prefs.getBoolean("adaptive_fps", true)
+                      isArtworkMotionEnabled = prefs.getBoolean("art_motion", true)
+                      isBeatZonesEnabled = prefs.getBoolean("beat_zones", true)
+                      isBatteryIntelligenceEnabled = prefs.getBoolean("battery_intelligence", true)
+                      isEdgeGlowEnabled = prefs.getBoolean("edge_glow", true)
+                      isPowerSaver = prefs.getBoolean("power_saver", false)
+                      isDebug = prefs.getBoolean("debug_mode", false)''',
+              "smart rendering prefs",
+          )
+
+          old_fps_settings = '''            TARGET_FPS = if (isPowerSaver) 30f else 60f
+                      frameIntervalNs = (1_000_000_000L / TARGET_FPS).toLong()
+          
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                          try {
+                              val s = surfaceHolder.surface
+                              if (s != null && s.isValid) {
+                                  s.setFrameRate(TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                              }
+                          } catch (e: Exception) {}
+                      }'''
+          new_fps_settings = '''            edgeGlowPaletteHash = Int.MIN_VALUE
+                      updateTargetFrameRate(force = true)'''
+          wallpaper = replace_once(wallpaper, old_fps_settings, new_fps_settings, "dynamic fps settings")
+
+          fps_helpers = '''
+                  private fun desiredFrameRate(): Float {
+                      var cap = if (isPowerSaver) 30f else 60f
+                      if (isBatteryIntelligenceEnabled && !batteryCharging) {
+                          cap = when {
+                              systemPowerSaveMode || batteryPercent <= 10 -> min(cap, 20f)
+                              batteryPercent <= 20 -> min(cap, 30f)
+                              else -> cap
+                          }
+                      }
+                      if (!isAdaptiveFpsEnabled) return cap
+          
+                      val activeAudio = MusicListenerService.currentIsPlaying ||
+                              bassEnergy > 0.035f || midEnergy > 0.035f || trebleEnergy > 0.035f
+                      val activeVisual = ogFadeProgress < 0.999f || fadeProgress < 0.999f ||
+                              surgeProgress > 0.01f || isTouching
+                      val desired = when {
+                          activeAudio || activeVisual -> cap
+                          MusicListenerService.currentAlbumArt != null -> min(cap, 30f)
+                          else -> min(cap, 15f)
+                      }
+                      return desired.coerceAtLeast(15f)
+                  }
+          
+                  private fun updateTargetFrameRate(force: Boolean = false) {
+                      val desired = desiredFrameRate()
+                      if (!force && abs(desired - TARGET_FPS) < 0.5f) return
+                      TARGET_FPS = desired
+                      frameIntervalNs = (1_000_000_000L / TARGET_FPS).toLong()
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                          try {
+                              val surface = surfaceHolder.surface
+                              if (surface != null && surface.isValid) {
+                                  surface.setFrameRate(TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                              }
+                          } catch (_: Exception) {}
+                      }
+                  }
+          
+          '''
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private fun startDrawing() {''',
+              fps_helpers + '''        private fun startDrawing() {''',
+              "adaptive fps helpers",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            val dtMs = (dtNs.toFloat() / 1_000_000f).coerceIn(0f, 50f)''',
+              '''            val dtMs = (dtNs.toFloat() / 1_000_000f).coerceIn(0f, 100f)''',
+              "adaptive frame delta",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) * ogUserSpeed
+                          ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE''',
+              '''                val hasArtwork = MusicListenerService.currentAlbumArt != null
+                          val motionSpeedTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetSpeed else 1f
+                          val motionBiasXTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetBiasX else 0f
+                          val motionBiasYTarget = if (isArtworkMotionEnabled && hasArtwork) artworkMotionTargetBiasY else 0f
+                          val motionEase = (dtSec * 2.2f).coerceIn(0f, 1f)
+                          artworkMotionSpeed += (motionSpeedTarget - artworkMotionSpeed) * motionEase
+                          artworkMotionBiasX += (motionBiasXTarget - artworkMotionBiasX) * motionEase
+                          artworkMotionBiasY += (motionBiasYTarget - artworkMotionBiasY) * motionEase
+                          val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) *
+                                  ogUserSpeed * artworkMotionSpeed
+                          ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE''',
+              "artwork motion easing",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= frameIntervalNs) {''',
+              '''            updateTargetFrameRate()
+          
+                      if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= frameIntervalNs) {''',
+              "adaptive fps frame update",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                        if (fft != null && fft.size > 10) {''',
+              '''                        if (fft != null && fft.size > 60) {''',
+              "fft size guard",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                            bassEnergy += (targetBass - bassEnergy) * bassEase
+          
+                                      var trebleMag = 0f''',
+              '''                            bassEnergy += (targetBass - bassEnergy) * bassEase
+          
+                                      var midMag = 0f
+                                      for (i in 3 until 10) {
+                                          val r = fft[i * 2].toFloat(); val iVal = fft[i * 2 + 1].toFloat()
+                                          midMag += hypot(r, iVal)
+                                      }
+                                      val rawMid = midMag / 7f
+                                      val targetMid = ((rawMid - 4f) / 70f).coerceIn(0f, 1f)
+                                      val midEase = if (targetMid > midEnergy) 0.30f else 0.11f
+                                      midEnergy += (targetMid - midEnergy) * midEase
+          
+                                      var trebleMag = 0f''',
+              "mid frequency band",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            bassEnergy = 0f
+                      trebleEnergy = 0f''',
+              '''            bassEnergy = 0f
+                      midEnergy = 0f
+                      trebleEnergy = 0f''',
+              "mid energy reset",
+          )
+
+          analyzer = '''
+                  private fun analyzeArtworkMotion(art: Bitmap): ArtworkMotionProfile {
+                      var sample: Bitmap? = null
+                      return try {
+                          val size = 24
+                          val scaled = Bitmap.createScaledBitmap(art, size, size, true)
+                          sample = scaled
+                          val pixels = IntArray(size * size)
+                          scaled.getPixels(pixels, 0, size, 0, 0, size, size)
+                          val lumas = FloatArray(pixels.size)
+                          var lumaSum = 0f
+                          var saturationSum = 0f
+                          var weightSum = 0f
+                          var weightedX = 0f
+                          var weightedY = 0f
+          
+                          var index = 0
+                          for (y in 0 until size) {
+                              for (x in 0 until size) {
+                                  val color = pixels[index]
+                                  val r = Color.red(color) / 255f
+                                  val g = Color.green(color) / 255f
+                                  val b = Color.blue(color) / 255f
+                                  val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
+                                  val maxChannel = maxOf(r, g, b)
+                                  val minChannel = minOf(r, g, b)
+                                  val saturation = if (maxChannel > 0.0001f) (maxChannel - minChannel) / maxChannel else 0f
+                                  lumas[index] = luma
+                                  lumaSum += luma
+                                  saturationSum += saturation
+                                  val weight = 0.08f + luma + saturation * 0.25f
+                                  weightSum += weight
+                                  weightedX += x * weight
+                                  weightedY += y * weight
+                                  index++
+                              }
+                          }
+          
+                          val mean = lumaSum / pixels.size
+                          var variance = 0f
+                          for (value in lumas) {
+                              val delta = value - mean
+                              variance += delta * delta
+                          }
+                          variance /= pixels.size
+                          val contrast = (variance * 8f).coerceIn(0f, 1f)
+                          val averageSaturation = (saturationSum / pixels.size).coerceIn(0f, 1f)
+                          val complexity = (contrast * 0.62f + averageSaturation * 0.38f).coerceIn(0f, 1f)
+                          val cx = if (weightSum > 0f) weightedX / weightSum / (size - 1f) else 0.5f
+                          val cy = if (weightSum > 0f) weightedY / weightSum / (size - 1f) else 0.5f
+                          ArtworkMotionProfile(
+                              speed = 0.88f + complexity * 0.28f,
+                              biasX = ((cx - 0.5f) * 0.12f).coerceIn(-0.07f, 0.07f),
+                              biasY = ((cy - 0.5f) * 0.12f).coerceIn(-0.07f, 0.07f)
+                          )
+                      } catch (_: Exception) {
+                          ArtworkMotionProfile(1f, 0f, 0f)
+                      } finally {
+                          val scaled = sample
+                          if (scaled != null && scaled !== art && !scaled.isRecycled) scaled.recycle()
+                      }
+                  }
+          
+          '''
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private fun ensureOgFields(art: Bitmap?) {''',
+              analyzer + '''        private fun ensureOgFields(art: Bitmap?) {''',
+              "artwork analyzer",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            ogFieldExecutor.execute {
+                          val next = buildOgField(art)
+                          ogFieldHandler.post {
+                              ogFieldBuilding = null
+                              if (next == null) return@post''',
+              '''            ogFieldExecutor.execute {
+                          val motionProfile = analyzeArtworkMotion(art)
+                          val next = buildOgField(art)
+                          ogFieldHandler.post {
+                              ogFieldBuilding = null
+                              artworkMotionTargetSpeed = motionProfile.speed
+                              artworkMotionTargetBiasX = motionProfile.biasX
+                              artworkMotionTargetBiasY = motionProfile.biasY
+                              if (next == null) return@post''',
+              "publish artwork motion profile",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            val drift = time * 0.06f
+                      val zoom = 1.18f + ogBorderEased * 0.10f''',
+              '''            val fallbackMotionSpeed = if (isArtworkMotionEnabled) artworkMotionSpeed else 1f
+                      val fallbackBiasX = if (isArtworkMotionEnabled) artworkMotionBiasX else 0f
+                      val fallbackBiasY = if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
+                      val midZoom = if (isBeatZonesEnabled) midEnergy * 0.025f else 0f
+                      val drift = time * 0.06f * fallbackMotionSpeed
+                      val zoom = 1.18f + ogBorderEased * 0.10f + midZoom''',
+              "fallback motion profile",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                -extraX * (0.5f + 0.5f * sin(drift)),
+                          -extraY * (0.5f + 0.5f * cos(drift * 0.8f))''',
+              '''                -extraX * (0.5f + 0.5f * sin(drift + fallbackBiasX * 8f)),
+                          -extraY * (0.5f + 0.5f * cos(drift * 0.8f + fallbackBiasY * 8f))''',
+              "fallback art direction",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            shader.setFloatUniform("timeScaled", ogNoiseClock)
+                      // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
+                      shader.setFloatUniform("scale", ogUserScale)
+                      shader.setFloatUniform("border", ogBorderEased * 0.35f)''',
+              '''            shader.setFloatUniform("timeScaled", ogNoiseClock)
+                      shader.setFloatUniform(
+                          "artMotion",
+                          if (isArtworkMotionEnabled) artworkMotionBiasX else 0f,
+                          if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
+                      )
+                      // Bass keeps the original zoom, mids gently change field scale, highs feed grain/edge shimmer.
+                      val midWarp = if (isBeatZonesEnabled) midEnergy * 0.08f else 0f
+                      // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
+                      shader.setFloatUniform("scale", ogUserScale + midWarp)
+                      shader.setFloatUniform("border", ogBorderEased * 0.35f)''',
+              "shader frequency zones",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''            val grainAlpha = (userGrainOpacity * 20f).toInt().coerceIn(0, 28)
+                      if (grainAlpha <= 0) return''',
+              '''            val highFrequencyBoost = if (isBeatZonesEnabled) trebleEnergy * 8f else 0f
+                      val grainAlpha = (userGrainOpacity * 20f + highFrequencyBoost).toInt().coerceIn(0, 28)
+                      if (grainAlpha <= 0) return''',
+              "treble grain reactivity",
+          )
+
+          edge_glow_functions = '''
+                  private fun ensureEdgeGlowShaders(w: Float, h: Float) {
+                      val paletteHash = targetColors.hashCode()
+                      val width = w.toInt()
+                      val height = h.toInt()
+                      if (edgeGlowWidth == width && edgeGlowHeight == height && edgeGlowPaletteHash == paletteHash) return
+          
+                      edgeGlowWidth = width
+                      edgeGlowHeight = height
+                      edgeGlowPaletteHash = paletteHash
+                      edgeGlowDepth = min(w, h) * 0.13f
+          
+                      val top = applyTuning(targetColors.getOrElse(0) { Color.WHITE })
+                      val right = applyTuning(targetColors.getOrElse(1) { top })
+                      val bottom = applyTuning(targetColors.getOrElse(2) { right })
+                      val left = applyTuning(targetColors.getOrElse(3) { top })
+          
+                      fun transparent(color: Int) = Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
+                      edgeGlowTopPaint.shader = LinearGradient(0f, 0f, 0f, edgeGlowDepth, top, transparent(top), Shader.TileMode.CLAMP)
+                      edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - edgeGlowDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)
+                      edgeGlowBottomPaint.shader = LinearGradient(0f, h, 0f, h - edgeGlowDepth, bottom, transparent(bottom), Shader.TileMode.CLAMP)
+                      edgeGlowLeftPaint.shader = LinearGradient(0f, 0f, edgeGlowDepth, 0f, left, transparent(left), Shader.TileMode.CLAMP)
+                  }
+          
+                  private fun drawEdgeGlow(canvas: Canvas, w: Float, h: Float) {
+                      if (!isEdgeGlowEnabled) return
+                      if (isBatteryIntelligenceEnabled && !batteryCharging && batteryPercent <= 5) return
+                      ensureEdgeGlowShaders(w, h)
+                      val high = if (isBeatZonesEnabled) trebleEnergy else 0f
+                      val pulse = (bassEnergy * userBeatPulse * 0.35f + high * 0.75f).coerceIn(0f, 1f)
+                      val alpha = (34f + pulse * 86f).toInt().coerceIn(24, 120)
+                      edgeGlowTopPaint.alpha = alpha
+                      edgeGlowRightPaint.alpha = alpha
+                      edgeGlowBottomPaint.alpha = alpha
+                      edgeGlowLeftPaint.alpha = alpha
+                      val depth = edgeGlowDepth
+                      canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)
+                      canvas.drawRect(w - depth, 0f, w, h, edgeGlowRightPaint)
+                      canvas.drawRect(0f, h - depth, w, h, edgeGlowBottomPaint)
+                      canvas.drawRect(0f, 0f, depth, h, edgeGlowLeftPaint)
+                  }
+          
+          '''
+          wallpaper = replace_once(
+              wallpaper,
+              '''        private fun drawVignetteLayer(canvas: Canvas) {''',
+              edge_glow_functions + '''        private fun drawVignetteLayer(canvas: Canvas) {''',
+              "edge glow renderer",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                    drawOgGrain(canvas, w, h)
+                              drawVignetteLayer(canvas)''',
+              '''                    drawOgGrain(canvas, w, h)
+                              drawVignetteLayer(canvas)
+                              drawEdgeGlow(canvas, w, h)''',
+              "edge glow draw order",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                    fadeProgress += userFadeSpeed''',
+              '''                    fadeProgress += (ogLastDtSec / ogFadeSeconds).coerceAtLeast(0f)''',
+              "time based palette fade",
+          )
+
+          wallpaper = replace_once(
+              wallpaper,
+              '''                            artFadeProgress += 0.02f''',
+              '''                            artFadeProgress += ogLastDtSec * 1.2f''',
+              "time based artwork fade",
+          )
+
+          activity = replace_once(
+              activity,
+              '''        SwitchSetting(R.id.rowCenterArt, "center_art_on", "Center artwork", "Show the current cover in the wallpaper.", groupId = R.id.groupCenterArt),
+                  SwitchSetting(R.id.rowWidget, "widget_on", "Now-playing overlay", "Show the track title and artist.", defaultValue = true, groupId = R.id.groupWidget),
+                  SwitchSetting(R.id.rowPowerSaver, "power_saver", "Power saver", "Limit wallpaper rendering to 30 frames per second."),''',
+              '''        SwitchSetting(R.id.rowCenterArt, "center_art_on", "Center artwork", "Show the current cover in the wallpaper.", groupId = R.id.groupCenterArt),
+                  SwitchSetting(R.id.rowWidget, "widget_on", "Now-playing overlay", "Show the track title and artist.", defaultValue = true, groupId = R.id.groupWidget),
+                  SwitchSetting(R.id.rowAdaptiveFps, "adaptive_fps", "Adaptive frame rate", "Run at full smoothness while active, then drop to 30 or 15 FPS when the wallpaper is calm.", defaultValue = true),
+                  SwitchSetting(R.id.rowArtMotion, "art_motion", "Artwork motion", "Use each cover's contrast and color balance to subtly shape drift speed and direction.", defaultValue = true),
+                  SwitchSetting(R.id.rowBeatZones, "beat_zones", "Frequency zones", "Bass controls zoom, mids shape the warp, and highs add grain and edge shimmer.", defaultValue = true),
+                  SwitchSetting(R.id.rowBatteryIntelligence, "battery_intelligence", "Battery intelligence", "Automatically reduce render load on low battery or Android power saver, then restore it while charging.", defaultValue = true),
+                  SwitchSetting(R.id.rowEdgeGlow, "edge_glow", "Edge glow", "Bleed album colors around the display edges and pulse them with the music.", defaultValue = true),
+                  SwitchSetting(R.id.rowPowerSaver, "power_saver", "Power saver", "Limit wallpaper rendering to 30 frames per second."),''',
+              "settings switches",
+          )
+
+          layout_insert = '''            <TextView
+                      style="@style/SectionHeader"
+                      android:text="Smart rendering" />
+          
+                  <LinearLayout style="@style/SettingsCard">
+          
+                      <include
+                          android:id="@+id/rowAdaptiveFps"
+                          layout="@layout/item_switch" />
+          
+                      <include
+                          android:id="@+id/rowArtMotion"
+                          layout="@layout/item_switch" />
+          
+                      <include
+                          android:id="@+id/rowBeatZones"
+                          layout="@layout/item_switch" />
+          
+                      <include
+                          android:id="@+id/rowBatteryIntelligence"
+                          layout="@layout/item_switch" />
+          
+                      <include
+                          android:id="@+id/rowEdgeGlow"
+                          layout="@layout/item_switch" />
+                  </LinearLayout>
+          
+          '''
+          layout = replace_once(
+              layout,
+              '''            <TextView
+                      style="@style/SectionHeader"
+                      android:text="System" />''',
+              layout_insert + '''            <TextView
+                      style="@style/SectionHeader"
+                      android:text="System" />''',
+              "smart rendering layout",
+          )
+
+          wallpaper_path.write_text(wallpaper, encoding="utf-8")
+          activity_path.write_text(activity, encoding="utf-8")
+          layout_path.write_text(layout, encoding="utf-8")
+
+      - name: Commit smart rendering features
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt app/src/main/java/com/gushypushy/diffusereborn/MainActivity.kt app/src/main/res/layout/activity_main.xml; then
+            echo "Smart rendering features already applied"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt app/src/main/java/com/gushypushy/diffusereborn/MainActivity.kt app/src/main/res/layout/activity_main.xml
+            git commit -m "feat: add smart rendering and reactive visuals"
+            git push origin HEAD:main
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
