@@ -152,6 +152,8 @@ class DiffuseWallpaperService : WallpaperService() {
         """
     }
 
+    private data class ArtworkMotionProfile(val speed: Float, val biasX: Float, val biasY: Float)
+
     inner class DiffuseEngine : Engine(),
         SharedPreferences.OnSharedPreferenceChangeListener,
         Choreographer.FrameCallback {
@@ -448,7 +450,6 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
         private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
         private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
-        private data class ArtworkMotionProfile(val speed: Float, val biasX: Float, val biasY: Float)
         private var artworkMotionSpeed = 1f
         private var artworkMotionTargetSpeed = 1f
         private var artworkMotionBiasX = 0f
