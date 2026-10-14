@@ -1,0 +1,306 @@
+name: Apply 120Hz performance pass
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/perf-120-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Apply performance patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, found {count}')
+              return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, repl, label):
+              out, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 regex match, found {count}')
+              return out
+
+          wallpaper_path = Path('app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt')
+          text = wallpaper_path.read_text()
+
+          text = replace_once(text,
+          '''            float random(float2 st) {
+                          return fract(sin(dot(st, float2(12.9898, 78.233))) * 43758.5453);
+                      }
+          ''',
+          '''            float random(float2 st) {
+                          // Arithmetic hash avoids four transcendental sin() calls per noise sample.
+                          // It keeps the same stable pseudo-random lattice behavior at far lower GPU cost.
+                          float3 p3 = fract(float3(st.x, st.y, st.x) * 0.1031);
+                          p3 += dot(p3, p3.yzx + float3(33.33, 33.33, 33.33));
+                          return fract((p3.x + p3.y) * p3.z);
+                      }
+          ''', 'AGSL random hash')
+
+          text = replace_once(text,
+              '        private val ogFieldPx = 512            // resolution of the soft color field\n',
+              '        private val ogFieldPx = 384            // blurred field; 384 keeps gradients smooth with less build/sampling cost\n',
+              'OG field resolution')
+
+          text = replace_once(text,
+              '            var cap = if (isPowerSaver) 30f else 60f\n',
+              '            var cap = if (isPowerSaver) 30f else 120f\n',
+              'active FPS cap')
+          text = replace_once(text,
+              '                MusicListenerService.currentAlbumArt != null -> min(cap, 30f)\n                else -> min(cap, 15f)\n',
+              '                MusicListenerService.currentAlbumArt != null -> min(cap, 60f)\n                else -> min(cap, 30f)\n',
+              'adaptive calm FPS')
+
+          text = replace_once(text,
+          '''            if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= frameIntervalNs) {
+                          draw()
+                          lastDrawTimeNs = frameTimeNanos
+                      }
+
+                      // Battery optimization: sleep until the next target frame instead of waking on every display vsync.
+                      if (isVisible) {
+                          val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                          if (remainingNs >= 1_000_000L) {
+                              choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                          } else {
+                              choreographer.postFrameCallback(this)
+                          }
+                      }
+          ''',
+          '''            // A small tolerance prevents nanosecond jitter from turning a 120 Hz target into an
+                      // accidental every-other-vsync cadence on panels whose frame period rounds slightly.
+                      val dueThresholdNs = (frameIntervalNs - 250_000L).coerceAtLeast(0L)
+                      if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= dueThresholdNs) {
+                          draw()
+                          lastDrawTimeNs = frameTimeNanos
+                      }
+
+                      if (isVisible) {
+                          if (TARGET_FPS >= 90f) {
+                              // At 120 Hz we want every display vsync. Delayed callbacks are ideal for
+                              // 30/60 FPS power saving but can miss an 8.33 ms slot after rounding.
+                              choreographer.postFrameCallback(this)
+                          } else {
+                              val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                              if (remainingNs >= 1_000_000L) {
+                                  choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                              } else {
+                                  choreographer.postFrameCallback(this)
+                              }
+                          }
+                      }
+          ''', '120hz frame scheduling')
+
+          text = replace_once(text, '                createBaseBlob()\n', '', 'legacy base blob startup')
+
+          text = sub_once(text,
+              r'''\n                // Init Particles\n                for\(i in 0 until MAX_PARTICLES\) \{.*?\n                // Init Rain\n                for\(i in 0 until MAX_RAIN\) \{\n                    resetRainDrop\(i, true\)\n                \}\n''',
+              '\n', 'retired particle/rain initialization')
+
+          text = sub_once(text,
+              r'''            try \{\n                vignetteBitmap = Bitmap\.createBitmap\(width, height, Bitmap\.Config\.ARGB_8888\).*?            initMesh\(width, height\)\n''',
+              '''            // OG-only renderer: do not allocate two extra full-screen software bitmaps here.
+                      // Vignette uses the cached gradient shader directly; the retired mesh path stays unallocated.
+                      vignetteBitmap?.recycle()
+                      vignetteBitmap = null
+                      meshBitmap?.recycle()
+                      meshBitmap = null
+                      meshCanvas = null
+''', 'surface legacy bitmap allocations')
+
+          text = sub_once(text,
+              r'''        private fun drawVignetteLayer\(canvas: Canvas\) \{.*?\n        \}\n\n        private fun drawFluidEffect''',
+              '''        private fun drawVignetteLayer(canvas: Canvas) {
+                      if (userVignette <= 0) return
+                      val beatDarkness = bassEnergy * 100f
+                      val finalVigAlpha = (userVignette + beatDarkness).coerceIn(0f, 255f).toInt()
+                      // Draw the cached radial shader directly instead of holding a screen-sized ARGB bitmap.
+                      vignetteDrawPaint.alpha = finalVigAlpha
+                      canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), vignetteDrawPaint)
+                  }
+
+                  private fun drawFluidEffect''', 'direct vignette rendering')
+
+          wallpaper_path.write_text(text)
+
+          music_path = Path('app/src/main/java/com/gushypushy/diffusereborn/MusicListenerService.kt')
+          text = music_path.read_text()
+          text = replace_once(text,
+              '    private var lastNotifyKey: String = ""\n',
+              '    private var lastNotifyKey: String = ""\n    @Volatile private var lastArtworkKey: String = ""\n    @Volatile private var pendingArtworkKey: String = ""\n',
+              'artwork dedupe state')
+
+          new_process = r'''    private fun artworkIdentity(original: Bitmap): String {
+              return "${currentPackageName}|${currentTitle}|${currentArtist}|${currentAlbum}|${original.width}x${original.height}"
+          }
+
+          private fun processBitmapFast(original: Bitmap) {
+              val artworkKey = artworkIdentity(original)
+              synchronized(this) {
+                  val cached = currentAlbumArt
+                  if ((artworkKey == lastArtworkKey && cached != null && !cached.isRecycled) ||
+                      artworkKey == pendingArtworkKey) {
+                      return
+                  }
+                  pendingArtworkKey = artworkKey
+              }
+
+              bitmapExecutor.execute {
+                  var temporarySource: Bitmap? = null
+                  var generatedArt: Bitmap? = null
+                  var colorBitmap: Bitmap? = null
+                  var published = false
+                  try {
+                      val source = if (original.config == Bitmap.Config.HARDWARE) {
+                          original.copy(Bitmap.Config.ARGB_8888, false).also { temporarySource = it }
+                      } else {
+                          original
+                      }
+
+                      val artBitmap = Bitmap.createScaledBitmap(source, 1200, 1200, false)
+                      generatedArt = artBitmap
+
+                      // This comparison now runs at most once per metadata/art identity instead of
+                      // every one-second media poll.
+                      val existing = currentAlbumArt
+                      if (existing != null && !existing.isRecycled && existing.sameAs(artBitmap)) {
+                          lastArtworkKey = artworkKey
+                          return@execute
+                      }
+
+                      currentAlbumArt = artBitmap
+                      published = true
+                      lastArtworkKey = artworkKey
+                      notifyMetadataChangedIfNeeded()
+
+                      colorBitmap = Bitmap.createScaledBitmap(artBitmap, 100, 100, false)
+                      // Palette generation is already on our single bitmap worker, so keep it synchronous.
+                      // This prevents overlapping Palette async jobs and lets us recycle the 100px bitmap immediately.
+                      val palette = Palette.from(colorBitmap)
+                          .maximumColorCount(24)
+                          .generate()
+
+                      val swatches = palette.swatches
+                      val bestSwatches = swatches.filter { swatch ->
+                          val hsl = swatch.hsl
+                          val isColor = hsl[1] > 0.25f
+                          val notTooDark = hsl[2] > 0.15f
+                          val notTooLight = hsl[2] < 0.85f
+                          isColor && notTooDark && notTooLight
+                      }.sortedByDescending { it.population }
+
+                      val primarySwatch = bestSwatches.firstOrNull() ?: palette.dominantSwatch
+                      val primaryColor = primarySwatch?.rgb ?: Color.DKGRAY
+                      val finalColors = mutableListOf<Int>()
+                      finalColors.add(primaryColor)
+                      finalColors.add(palette.getLightVibrantColor(manipulateColor(primaryColor, 1.3f)))
+                      finalColors.add(palette.getDarkVibrantColor(manipulateColor(primaryColor, 0.7f)))
+                      val secondarySwatch = bestSwatches.firstOrNull { it != primarySwatch }
+                      finalColors.add(secondarySwatch?.rgb ?: manipulateColor(primaryColor, 0.9f))
+                      finalColors.add(palette.getMutedColor(Color.rgb(40, 40, 40)))
+
+                      val distinctColors = finalColors.distinct().toMutableList()
+                      while (distinctColors.size < 5) distinctColors.add(distinctColors[0])
+                      if (currentColors != distinctColors) {
+                          currentColors = distinctColors
+                          notifyMetadataChangedIfNeeded()
+                      }
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  } finally {
+                      colorBitmap?.let { if (!it.isRecycled) it.recycle() }
+                      if (!published) {
+                          generatedArt?.let { if (it !== original && !it.isRecycled) it.recycle() }
+                      }
+                      temporarySource?.let {
+                          if (it !== generatedArt && it !== original && !it.isRecycled) it.recycle()
+                      }
+                      synchronized(this) {
+                          if (pendingArtworkKey == artworkKey) pendingArtworkKey = ""
+                      }
+                  }
+              }
+          }'''
+
+          text = sub_once(text,
+              r'''    private fun processBitmapFast\(original: Bitmap\) \{.*?\n    \}\n\n    private fun manipulateColor''',
+              new_process + '\n\n    private fun manipulateColor', 'artwork processing dedupe')
+          music_path.write_text(text)
+
+          preview_path = Path('app/src/main/java/DiffusePreviewView.kt')
+          text = preview_path.read_text()
+          text = replace_once(text,
+              '    private var lastFrameTimeNs = 0L\n    private val slowMotionFactor = 0.25f\n',
+              '    private var lastFrameTimeNs = 0L\n    private var lastPreviewDrawTimeNs = 0L\n    private val previewFrameIntervalNs = 1_000_000_000L / 30L\n    private val slowMotionFactor = 0.25f\n',
+              'preview frame state')
+          text = replace_once(text,
+              '        lastFrameTimeNs = 0L\n        choreographer.postFrameCallback(this)\n',
+              '        lastFrameTimeNs = 0L\n        lastPreviewDrawTimeNs = 0L\n        choreographer.postFrameCallback(this)\n',
+              'preview resume state')
+          text = replace_once(text,
+          '''        invalidate()
+                  choreographer.postFrameCallback(this)
+          ''',
+          '''        val dueNs = (previewFrameIntervalNs - 500_000L).coerceAtLeast(0L)
+                  if (lastPreviewDrawTimeNs == 0L || frameTimeNanos - lastPreviewDrawTimeNs >= dueNs) {
+                      invalidate()
+                      lastPreviewDrawTimeNs = frameTimeNanos
+                  }
+                  val remainingNs = if (lastPreviewDrawTimeNs == 0L) 0L else
+                      previewFrameIntervalNs - (System.nanoTime() - lastPreviewDrawTimeNs)
+                  if (remainingNs >= 1_000_000L) {
+                      choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                  } else {
+                      choreographer.postFrameCallback(this)
+                  }
+          ''', 'preview 30fps scheduling')
+          preview_path.write_text(text)
+          PY
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Commit optimized renderer
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt \
+                  app/src/main/java/com/gushypushy/diffusereborn/MusicListenerService.kt \
+                  app/src/main/java/DiffusePreviewView.kt
+          git commit -m 'perf: optimize renderer for 120hz'
+          git push origin HEAD:main
