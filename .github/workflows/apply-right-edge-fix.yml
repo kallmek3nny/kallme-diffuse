@@ -1,0 +1,89 @@
+name: Apply right edge renderer fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-right-edge-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  right-edge-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Fix right edge sampling and glow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global text
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''                float2 depthR = clamp(r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035), 0.0, 1.0);\n                float2 tc = clamp(r, 0.0, 1.0) * fieldRes;\n                float2 depthTc = depthR * fieldRes;''',
+              '''                // Mirror coordinates at the texture boundary instead of hard-clamping them.\n                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.\n                float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);\n                float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);\n                float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);\n                float2 tc = sampleR * fieldRes;\n                float2 depthTc = depthR * fieldRes;''',
+              "mirror shader edges",
+          )
+
+          replace_once(
+              '''            edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - edgeGlowDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)''',
+              '''            val rightDepth = edgeGlowDepth * 1.22f\n            edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - rightDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)''',
+              "right glow feather",
+          )
+
+          replace_once(
+              '''            edgeGlowTopPaint.alpha = alpha\n            edgeGlowRightPaint.alpha = alpha\n            edgeGlowBottomPaint.alpha = alpha\n            edgeGlowLeftPaint.alpha = alpha\n            val depth = edgeGlowDepth\n            canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)\n            canvas.drawRect(w - depth, 0f, w, h, edgeGlowRightPaint)\n            canvas.drawRect(0f, h - depth, w, h, edgeGlowBottomPaint)\n            canvas.drawRect(0f, 0f, depth, h, edgeGlowLeftPaint)''',
+              '''            edgeGlowTopPaint.alpha = alpha\n            edgeGlowRightPaint.alpha = (alpha * 0.68f).toInt().coerceAtLeast(1)\n            edgeGlowBottomPaint.alpha = alpha\n            edgeGlowLeftPaint.alpha = alpha\n            val depth = edgeGlowDepth\n            val rightDepth = depth * 1.22f\n            canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)\n            canvas.drawRect(w - rightDepth, 0f, w, h, edgeGlowRightPaint)\n            canvas.drawRect(0f, h - depth, w, h, edgeGlowBottomPaint)\n            canvas.drawRect(0f, 0f, depth, h, edgeGlowLeftPaint)''',
+              "right glow alpha",
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Commit right edge fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt
+          git commit -m "fix: smooth right renderer edge"
+          git push origin HEAD:main
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kallme-diffuse-right-edge-fix-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
