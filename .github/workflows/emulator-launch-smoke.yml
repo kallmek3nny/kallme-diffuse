@@ -43,7 +43,7 @@ jobs:
       - name: Boot emulator and launch app
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 36
           target: google_apis
           arch: x86_64
           profile: pixel_7
