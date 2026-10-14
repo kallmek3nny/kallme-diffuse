@@ -86,7 +86,10 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float highs;
 
             float random(float2 st) {
-                return fract(sin(dot(st, float2(12.9898, 78.233))) * 43758.5453);
+                // Arithmetic hash avoids transcendental sin() calls in every lattice sample.
+                float3 p3 = fract(float3(st.x, st.y, st.x) * 0.1031);
+                p3 += dot(p3, p3.yzx + float3(33.33, 33.33, 33.33));
+                return fract((p3.x + p3.y) * p3.z);
             }
 
             float noise(float2 st) {
@@ -522,7 +525,7 @@ class DiffuseWallpaperService : WallpaperService() {
         // Resolution of the soft colour field. The original GL app blurred into a 192px buffer but
         // sampled it with GL_LINEAR on a full-screen quad. Our float field keeps gradient precision,
         // with linear child sampling and dither at the final framebuffer conversion.
-        private val ogFieldPx = 512            // resolution of the soft color field
+        private val ogFieldPx = 384            // blurred field; lower build/sampling cost, same soft look
         private val ogBlendPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
         private val ogBackdropPaint = Paint().apply {
             isAntiAlias = true
@@ -604,20 +607,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 prefs.registerOnSharedPreferenceChangeListener(this)
                 systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
                 updateSettings()
-                createBaseBlob()
 
-                // Init Particles
-                for(i in 0 until MAX_PARTICLES) {
-                    partX[i] = (Math.random() * 1000).toFloat()
-                    partY[i] = (Math.random() * 2000).toFloat()
-                    partSpeed[i] = (1f + Math.random() * 2f).toFloat()
-                    partAlpha[i] = (Math.random() * 255).toFloat()
-                }
-
-                // Init Rain
-                for(i in 0 until MAX_RAIN) {
-                    resetRainDrop(i, true)
-                }
 
                 val filter = IntentFilter(MusicListenerService.ACTION_SURGE)
                 val screenFilter = IntentFilter().apply {
@@ -917,16 +907,12 @@ class DiffuseWallpaperService : WallpaperService() {
                 floatArrayOf(0.4f, 1.0f),
                 android.graphics.Shader.TileMode.CLAMP
             )
-            try {
-                vignetteBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(vignetteBitmap!!)
-                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), vignetteDrawPaint)
-            } catch (e: Exception) {
-                vignetteBitmap = null
-                e.printStackTrace()
-            }
-
-            initMesh(width, height)
+            // OG-only renderer: avoid two extra full-screen software bitmaps.
+            vignetteBitmap?.recycle()
+            vignetteBitmap = null
+            meshBitmap?.recycle()
+            meshBitmap = null
+            meshCanvas = null
         }
 
         private fun initMesh(w: Int, h: Int) {
@@ -1051,7 +1037,7 @@ class DiffuseWallpaperService : WallpaperService() {
 
 
         private fun desiredFrameRate(): Float {
-            var cap = if (isPowerSaver) 30f else 60f
+            var cap = if (isPowerSaver) 30f else 120f
             if (isBatteryIntelligenceEnabled && !batteryCharging) {
                 cap = when {
                     systemPowerSaveMode || batteryPercent <= 10 -> min(cap, 20f)
@@ -1067,8 +1053,8 @@ class DiffuseWallpaperService : WallpaperService() {
                     surgeProgress > 0.01f || isTouching
             val desired = when {
                 activeAudio || activeVisual -> cap
-                MusicListenerService.currentAlbumArt != null -> min(cap, 30f)
-                else -> min(cap, 15f)
+                MusicListenerService.currentAlbumArt != null -> min(cap, 60f)
+                else -> min(cap, 30f)
             }
             return desired.coerceAtLeast(15f)
         }
@@ -1147,18 +1133,24 @@ class DiffuseWallpaperService : WallpaperService() {
 
             updateTargetFrameRate()
 
-            if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= frameIntervalNs) {
+            // Tiny tolerance avoids nanosecond jitter turning 120 Hz into every-other-vsync.
+            val dueThresholdNs = (frameIntervalNs - 250_000L).coerceAtLeast(0L)
+            if (lastDrawTimeNs == 0L || frameTimeNanos - lastDrawTimeNs >= dueThresholdNs) {
                 draw()
                 lastDrawTimeNs = frameTimeNanos
             }
 
-            // Battery optimization: sleep until the next target frame instead of waking on every display vsync.
             if (isVisible) {
-                val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
-                if (remainingNs >= 1_000_000L) {
-                    choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
-                } else {
+                if (TARGET_FPS >= 90f) {
+                    // At 120 Hz wake on every vsync. Delayed callbacks are kept for 30/60 FPS modes.
                     choreographer.postFrameCallback(this)
+                } else {
+                    val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                    if (remainingNs >= 1_000_000L) {
+                        choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                    } else {
+                        choreographer.postFrameCallback(this)
+                    }
                 }
             }
         }
@@ -2474,10 +2466,8 @@ class DiffuseWallpaperService : WallpaperService() {
             if (userVignette <= 0) return
             val beatDarkness = bassEnergy * 100f
             val finalVigAlpha = (userVignette + beatDarkness).coerceIn(0f, 255f).toInt()
-            vignettePaint.alpha = finalVigAlpha
-            vignetteBitmap?.let {
-                canvas.drawBitmap(it, 0f, 0f, vignettePaint)
-            }
+            vignetteDrawPaint.alpha = finalVigAlpha
+            canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), vignetteDrawPaint)
         }
 
         private fun drawFluidEffect(canvas: Canvas, w: Float, h: Float) {

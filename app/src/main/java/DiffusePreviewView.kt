@@ -64,6 +64,8 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var screenW = 0f
     private var screenH = 0f
     private var lastFrameTimeNs = 0L
+    private var lastPreviewDrawTimeNs = 0L
+    private val previewFrameIntervalNs = 1_000_000_000L / 30L
     private val slowMotionFactor = 0.25f
     private val hsvCache = FloatArray(3)
 
@@ -200,6 +202,7 @@ class DiffusePreviewView @JvmOverloads constructor(
     fun onResume() {
         isVisible = true
         lastFrameTimeNs = 0L
+        lastPreviewDrawTimeNs = 0L
         choreographer.postFrameCallback(this)
     }
 
@@ -224,8 +227,18 @@ class DiffusePreviewView @JvmOverloads constructor(
         val dtMs = (dtNs.toFloat() / 1_000_000f).coerceIn(0f, 50f)
         time += userSpeed * (dtMs / 16.6667f) * slowMotionFactor
 
-        invalidate()
-        choreographer.postFrameCallback(this)
+        val dueNs = (previewFrameIntervalNs - 500_000L).coerceAtLeast(0L)
+        if (lastPreviewDrawTimeNs == 0L || frameTimeNanos - lastPreviewDrawTimeNs >= dueNs) {
+            invalidate()
+            lastPreviewDrawTimeNs = frameTimeNanos
+        }
+        val remainingNs = if (lastPreviewDrawTimeNs == 0L) 0L else
+            previewFrameIntervalNs - (System.nanoTime() - lastPreviewDrawTimeNs)
+        if (remainingNs >= 1_000_000L) {
+            choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+        } else {
+            choreographer.postFrameCallback(this)
+        }
     }
 
     private fun lerpColor(c1: Int, c2: Int, p: Float): Int {

@@ -89,6 +89,8 @@ class MusicListenerService : NotificationListenerService() {
     private lateinit var prefs: SharedPreferences
 
     private var lastNotifyKey: String = ""
+    @Volatile private var lastArtworkKey: String = ""
+    @Volatile private var pendingArtworkKey: String = ""
 
     private val pollRunner = object : Runnable {
         override fun run() {
@@ -306,62 +308,89 @@ class MusicListenerService : NotificationListenerService() {
         }
     }
 
+    private fun artworkIdentity(original: Bitmap): String {
+        return "${currentPackageName}|${currentTitle}|${currentArtist}|${currentAlbum}|${original.width}x${original.height}"
+    }
+
     private fun processBitmapFast(original: Bitmap) {
+        val artworkKey = artworkIdentity(original)
+        synchronized(this) {
+            val cached = currentAlbumArt
+            if ((artworkKey == lastArtworkKey && cached != null && !cached.isRecycled) ||
+                artworkKey == pendingArtworkKey) {
+                return
+            }
+            pendingArtworkKey = artworkKey
+        }
+
         bitmapExecutor.execute {
+            var temporarySource: Bitmap? = null
+            var generatedArt: Bitmap? = null
+            var colorBitmap: Bitmap? = null
+            var published = false
             try {
-                var workableBitmap = original
-                if (original.config == Bitmap.Config.HARDWARE) {
-                    workableBitmap = original.copy(Bitmap.Config.ARGB_8888, false)
+                val source = if (original.config == Bitmap.Config.HARDWARE) {
+                    original.copy(Bitmap.Config.ARGB_8888, false).also { temporarySource = it }
+                } else {
+                    original
                 }
 
-                val artBitmap = Bitmap.createScaledBitmap(workableBitmap, 1200, 1200, false)
+                val artBitmap = Bitmap.createScaledBitmap(source, 1200, 1200, false)
+                generatedArt = artBitmap
 
-                if (currentAlbumArt != null && currentAlbumArt!!.sameAs(artBitmap)) {
-                    if (artBitmap != currentAlbumArt) artBitmap.recycle()
+                // The expensive pixel comparison now happens at most once per track/art identity.
+                val existing = currentAlbumArt
+                if (existing != null && !existing.isRecycled && existing.sameAs(artBitmap)) {
+                    lastArtworkKey = artworkKey
                     return@execute
                 }
 
                 currentAlbumArt = artBitmap
+                published = true
+                lastArtworkKey = artworkKey
                 notifyMetadataChangedIfNeeded()
 
-                val colorBitmap = Bitmap.createScaledBitmap(artBitmap, 100, 100, false)
-
-                Palette.from(colorBitmap)
+                colorBitmap = Bitmap.createScaledBitmap(artBitmap, 100, 100, false)
+                // Already on a serial worker, so synchronous Palette generation avoids overlapping jobs.
+                val palette = Palette.from(colorBitmap)
                     .maximumColorCount(24)
-                    .generate { palette ->
-                        if (palette != null) {
-                            val swatches = palette.swatches
+                    .generate()
 
-                            val bestSwatches = swatches.filter { swatch ->
-                                val hsl = swatch.hsl
-                                val isColor = hsl[1] > 0.25f
-                                val notTooDark = hsl[2] > 0.15f
-                                val notTooLight = hsl[2] < 0.85f
-                                isColor && notTooDark && notTooLight
-                            }.sortedByDescending { it.population }
+                val swatches = palette.swatches
+                val bestSwatches = swatches.filter { swatch ->
+                    val hsl = swatch.hsl
+                    hsl[1] > 0.25f && hsl[2] > 0.15f && hsl[2] < 0.85f
+                }.sortedByDescending { it.population }
 
-                            val primarySwatch = bestSwatches.firstOrNull() ?: palette.dominantSwatch
-                            val primaryColor = primarySwatch?.rgb ?: Color.DKGRAY
+                val primarySwatch = bestSwatches.firstOrNull() ?: palette.dominantSwatch
+                val primaryColor = primarySwatch?.rgb ?: Color.DKGRAY
+                val finalColors = mutableListOf<Int>()
+                finalColors.add(primaryColor)
+                finalColors.add(palette.getLightVibrantColor(manipulateColor(primaryColor, 1.3f)))
+                finalColors.add(palette.getDarkVibrantColor(manipulateColor(primaryColor, 0.7f)))
+                val secondarySwatch = bestSwatches.firstOrNull { it != primarySwatch }
+                finalColors.add(secondarySwatch?.rgb ?: manipulateColor(primaryColor, 0.9f))
+                finalColors.add(palette.getMutedColor(Color.rgb(40, 40, 40)))
 
-                            val finalColors = mutableListOf<Int>()
-                            finalColors.add(primaryColor)
-                            finalColors.add(palette.getLightVibrantColor(manipulateColor(primaryColor, 1.3f)))
-                            finalColors.add(palette.getDarkVibrantColor(manipulateColor(primaryColor, 0.7f)))
-                            val secondarySwatch = bestSwatches.firstOrNull { it != primarySwatch }
-                            finalColors.add(secondarySwatch?.rgb ?: manipulateColor(primaryColor, 0.9f))
-                            finalColors.add(palette.getMutedColor(Color.rgb(40, 40, 40)))
-
-                            val distinctColors = finalColors.distinct().toMutableList()
-                            while (distinctColors.size < 5) distinctColors.add(distinctColors[0])
-
-                            if (currentColors != distinctColors) {
-                                currentColors = distinctColors
-                                notifyMetadataChangedIfNeeded()
-                            }
-                        }
-                    }
+                val distinctColors = finalColors.distinct().toMutableList()
+                while (distinctColors.size < 5) distinctColors.add(distinctColors[0])
+                if (currentColors != distinctColors) {
+                    currentColors = distinctColors
+                    notifyMetadataChangedIfNeeded()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
+            } finally {
+                colorBitmap?.let { if (!it.isRecycled) it.recycle() }
+                if (!published) {
+                    generatedArt?.let { if (it !== original && !it.isRecycled) it.recycle() }
+                }
+                temporarySource?.let {
+                    if (it !== generatedArt && it !== original && !it.isRecycled) it.recycle()
+                }
+                synchronized(this) {
+                    if (pendingArtworkKey == artworkKey) pendingArtworkKey = ""
+                }
             }
         }
     }
