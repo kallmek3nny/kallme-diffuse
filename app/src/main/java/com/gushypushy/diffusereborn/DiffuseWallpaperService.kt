@@ -125,10 +125,28 @@ class DiffuseWallpaperService : WallpaperService() {
                     artMotion.y * cos(timeScaled * 0.61 + 1.1)
                 );
                 uv += artOffset;
-                float2 q = float2(fbm(uv + float2(timeScaled * 0.1, cos(timeScaled))),
-                                  fbm(uv + float2(timeScaled * 0.1, timeScaled)));
-                float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
-                                  fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
+
+                // Broad low-frequency wave warp. FBM supplies the fine organic motion, while these
+                // travelling curves keep dark / low-detail artwork visibly fluid instead of flat.
+                float waveTime = timeScaled * 0.9;
+                float waveX = sin(uv.y * 5.2 + waveTime * 1.45) * 0.050
+                            + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018;
+                float waveY = sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
+                            + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015;
+                float2 waveUv = uv + float2(waveX, waveY);
+
+                float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),
+                                  fbm(waveUv + float2(timeScaled * 0.1, timeScaled)));
+                float2 r = float2(fbm(0.5 * waveUv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),
+                                  fbm(0.5 * waveUv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));
+
+                // A second, smaller bend turns the blurred colour field into broad S-shaped ribbons.
+                // Mids gently deepen the bend without making quiet songs twitchy.
+                float ribbonX = sin((r.y + q.x * 0.32) * 8.0 - waveTime * 1.25) *
+                                (0.024 + mids * 0.012);
+                float ribbonY = sin((r.x - q.y * 0.28) * 7.0 + waveTime * 1.05 + 1.1) *
+                                (0.018 + mids * 0.009);
+                r += float2(ribbonX, ribbonY);
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
 
                 // A tiny radial elastic deformation makes bass hits feel physical instead of
