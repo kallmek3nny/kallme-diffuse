@@ -1,6 +1,6 @@
 package com.gushypushy.diffusereborn
 
-import android.app.Activity
+import androidx.appcompat.app.AppCompatActivity
 import android.app.NotificationManager
 import android.app.WallpaperManager
 import android.content.BroadcastReceiver
@@ -38,7 +38,7 @@ import com.google.android.material.slider.Slider
 import org.json.JSONObject
 import java.util.Locale
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val REQUEST_AUDIO_PERMISSION = 101
@@ -131,10 +131,9 @@ class MainActivity : Activity() {
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        // Material You dynamic colors follow the user's system wallpaper/theme on Android 12+.
-        // Older versions simply keep the Material 3 fallback palette from the app theme.
+        // Apply the Material You overlay before AppCompat initializes the themed window/views.
         DynamicColors.applyToActivityIfAvailable(this)
+        super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
