@@ -203,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             slider.valueFrom = 0f
             slider.valueTo = setting.max.toFloat()
             slider.stepSize = 1f
-            val current = prefs.getInt(setting.key, setting.defaultValue).coerceIn(0, setting.max)
+            val current = prefs.getIntCompat(setting.key, setting.defaultValue).coerceIn(0, setting.max)
             slider.value = current.toFloat()
             value.text = setting.format(current)
             slider.contentDescription = setting.label
@@ -225,7 +225,7 @@ class MainActivity : AppCompatActivity() {
             label.text = setting.label
             caption.text = setting.caption
             caption.visibility = View.VISIBLE
-            toggle.isChecked = prefs.getBoolean(setting.key, setting.defaultValue)
+            toggle.isChecked = prefs.getBooleanCompat(setting.key, setting.defaultValue)
             toggle.contentDescription = setting.label
             toggle.setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(setting.key, checked).apply()
@@ -240,7 +240,7 @@ class MainActivity : AppCompatActivity() {
             val row = findViewById<View>(setting.rowId) ?: continue
             val slider = row.findViewById<Slider>(R.id.sliderBar) ?: continue
             val value = row.findViewById<TextView>(R.id.sliderValue) ?: continue
-            val progress = prefs.getInt(setting.key, setting.defaultValue).coerceIn(0, setting.max)
+            val progress = prefs.getIntCompat(setting.key, setting.defaultValue).coerceIn(0, setting.max)
             if (slider.value.toInt() != progress) slider.value = progress.toFloat()
             value.text = setting.format(progress)
         }
@@ -248,7 +248,7 @@ class MainActivity : AppCompatActivity() {
         for (setting in switchSettings) {
             val row = findViewById<View>(setting.rowId) ?: continue
             val toggle = row.findViewById<SwitchCompat>(R.id.switchToggle) ?: continue
-            toggle.isChecked = prefs.getBoolean(setting.key, setting.defaultValue)
+            toggle.isChecked = prefs.getBooleanCompat(setting.key, setting.defaultValue)
             setting.groupId?.let {
                 updateExpandableGroup(it, toggle.isChecked, animate = false)
             }

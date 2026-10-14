@@ -110,7 +110,7 @@ class ClassicActivity : AppCompatActivity() {
     /** Persist a 0..100 slider into the shared prefs file the wallpaper engine reads. */
     private fun bindSeek(viewId: Int, key: String, default: Int) {
         val seek = findViewById<SeekBar>(viewId) ?: return
-        seek.progress = prefs.getInt(key, default)
+        seek.progress = prefs.getIntCompat(key, default)
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, value: Int, fromUser: Boolean) {
                 if (fromUser) prefs.edit().putInt(key, value).apply()

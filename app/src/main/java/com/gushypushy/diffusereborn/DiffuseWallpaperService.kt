@@ -981,36 +981,36 @@ class DiffuseWallpaperService : WallpaperService() {
             // scale:    u_scale = slider * 1.2 + 0.4, per the original Player.java uniform setup.
             // speed:    scales the timeSpeed target; 50 == the original's stock playing rate.
             // strength: amplitude of the beat-driven u_border zoom.
-            ogUserScale = (prefs.getInt("og_scale", 50).toFloat() / 100f) * 1.2f + 0.4f
-            ogUserSpeed = (prefs.getInt("og_speed", 50).toFloat() / 50f)
-            ogUserStrength = (prefs.getInt("og_strength", 50).toFloat() / 50f)
+            ogUserScale = (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f + 0.4f
+            ogUserSpeed = (prefs.getIntCompat("og_speed", 50).toFloat() / 50f)
+            ogUserStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f)
 
             // --- Reactivity ---
             // beat drives the zoom border alongside og_strength; both are live in drawOgDiffuseReal.
-            userBeatPulse = (prefs.getInt("beat", 50).toFloat() / 50f) * 2.0f
+            userBeatPulse = (prefs.getIntCompat("beat", 50).toFloat() / 50f) * 2.0f
 
             // --- Colour ---
-            userSat = (prefs.getInt("sat", 50).toFloat() / 50f) * 1.25f
-            userBright = (prefs.getInt("bright", 50).toFloat() / 50f) * 1.0f
-            userHue = prefs.getInt("hue_shift", 0).toFloat()
+            userSat = (prefs.getIntCompat("sat", 50).toFloat() / 50f) * 1.25f
+            userBright = (prefs.getIntCompat("bright", 50).toFloat() / 50f) * 1.0f
+            userHue = prefs.getIntCompat("hue_shift", 0).toFloat()
             // Collapse the three colour controls into one ColorMatrix applied to the field draw.
             buildOgTuneFilter()
 
             // --- Depth / finish ---
-            userVignette = (prefs.getInt("vignette", 0).toFloat() / 100f) * 200f
-            userGrainOpacity = prefs.getInt("grain", 22).toFloat() / 100f
+            userVignette = (prefs.getIntCompat("vignette", 0).toFloat() / 100f) * 200f
+            userGrainOpacity = prefs.getIntCompat("grain", 22).toFloat() / 100f
 
             // --- Now Playing overlay ---
-            isWidgetEnabled = prefs.getBoolean("widget_on", true)
-            userWidgetScale = 0.5f + (prefs.getInt("widget_scale", 50).toFloat() / 50f)
-            userPosX = prefs.getInt("pos_x", 50).toFloat() / 100f
-            userPosY = prefs.getInt("pos_y", 50).toFloat() / 100f
+            isWidgetEnabled = prefs.getBooleanCompat("widget_on", true)
+            userWidgetScale = 0.5f + (prefs.getIntCompat("widget_scale", 50).toFloat() / 50f)
+            userPosX = prefs.getIntCompat("pos_x", 50).toFloat() / 100f
+            userPosY = prefs.getIntCompat("pos_y", 50).toFloat() / 100f
 
             // --- Album art centrepiece ---
-            isCenterArtEnabled = prefs.getBoolean("center_art_on", false)
-            centerArtBlur = prefs.getInt("center_blur", 0).toFloat() / 100f
-            centerArtOpacity = (prefs.getInt("center_opacity", 100).toFloat() / 100f * 255).toInt()
-            centerArtScale = 0.5f + (prefs.getInt("center_size", 50).toFloat() / 50f)
+            isCenterArtEnabled = prefs.getBooleanCompat("center_art_on", false)
+            centerArtBlur = prefs.getIntCompat("center_blur", 0).toFloat() / 100f
+            centerArtOpacity = (prefs.getIntCompat("center_opacity", 100).toFloat() / 100f * 255).toInt()
+            centerArtScale = 0.5f + (prefs.getIntCompat("center_size", 50).toFloat() / 50f)
             lastProcessedArt = null
             if (!isCenterArtEnabled) {
                 centerArtBuildSource = null
@@ -1019,20 +1019,20 @@ class DiffuseWallpaperService : WallpaperService() {
             }
 
             // --- Smart rendering / system ---
-            isAdaptiveFpsEnabled = prefs.getBoolean("adaptive_fps", true)
-            isArtworkMotionEnabled = prefs.getBoolean("art_motion", true)
-            isBeatZonesEnabled = prefs.getBoolean("beat_zones", true)
-            isBatteryIntelligenceEnabled = prefs.getBoolean("battery_intelligence", true)
-            isEdgeGlowEnabled = prefs.getBoolean("edge_glow", true)
-            isPowerSaver = prefs.getBoolean("power_saver", false)
-            isDebug = prefs.getBoolean("debug_mode", false)
+            isAdaptiveFpsEnabled = prefs.getBooleanCompat("adaptive_fps", true)
+            isArtworkMotionEnabled = prefs.getBooleanCompat("art_motion", true)
+            isBeatZonesEnabled = prefs.getBooleanCompat("beat_zones", true)
+            isBatteryIntelligenceEnabled = prefs.getBooleanCompat("battery_intelligence", true)
+            isEdgeGlowEnabled = prefs.getBooleanCompat("edge_glow", true)
+            isPowerSaver = prefs.getBooleanCompat("power_saver", false)
+            isDebug = prefs.getBooleanCompat("debug_mode", false)
 
             val wasForceDark = isForceDarkIcons
-            isForceDarkIcons = prefs.getBoolean("force_dark_icons", false)
+            isForceDarkIcons = prefs.getBooleanCompat("force_dark_icons", false)
 
             // The track-change palette crossfade. og_transition is in seconds so it reads the way the
             // user thinks about it; the legacy "transition_speed" curve was unitless and confusing.
-            ogFadeSeconds = (prefs.getInt("og_transition", 16).toFloat() / 10f).coerceIn(0.1f, 6.0f)
+            ogFadeSeconds = (prefs.getIntCompat("og_transition", 16).toFloat() / 10f).coerceIn(0.1f, 6.0f)
             // Palette lerp is matched to the field fade so colour and field arrive together.
             userFadeSpeed = (1f / (ogFadeSeconds * 60f)).coerceIn(0.0005f, 0.2f)
 

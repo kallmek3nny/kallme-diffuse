@@ -163,19 +163,19 @@ class DiffusePreviewView @JvmOverloads constructor(
     }
 
     private fun updateSettings() {
-        userSpeed = 0.0001f + (prefs.getInt("og_speed", 50).toFloat() / 100f) * 0.08f
-        userSizeMult = 0.7f + (prefs.getInt("og_scale", 50).toFloat() / 100f)
+        userSpeed = 0.0001f + (prefs.getIntCompat("og_speed", 50).toFloat() / 100f) * 0.08f
+        userSizeMult = 0.7f + (prefs.getIntCompat("og_scale", 50).toFloat() / 100f)
         userWander = 1.0f
-        ogPreviewScale = 0.4f + (prefs.getInt("og_scale", 50).toFloat() / 100f) * 1.2f
-        ogPreviewStrength = (prefs.getInt("og_strength", 50).toFloat() / 50f).coerceIn(0f, 2f)
+        ogPreviewScale = 0.4f + (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f
+        ogPreviewStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f).coerceIn(0f, 2f)
 
-        userSat = (prefs.getInt("sat", 50).toFloat() / 50f) * 1.25f
-        userBright = (prefs.getInt("bright", 50).toFloat() / 50f) * 1.0f
+        userSat = (prefs.getIntCompat("sat", 50).toFloat() / 50f) * 1.25f
+        userBright = (prefs.getIntCompat("bright", 50).toFloat() / 50f) * 1.0f
 
-        userHue = prefs.getInt("hue_shift", 0).toFloat()
-        userBlobAlpha = prefs.getInt("alpha", 200).coerceIn(0, 255)
+        userHue = prefs.getIntCompat("hue_shift", 0).toFloat()
+        userBlobAlpha = prefs.getIntCompat("alpha", 200).coerceIn(0, 255)
 
-        val tSpeed = prefs.getInt("transition_speed", 20).toFloat() / 100f
+        val tSpeed = prefs.getIntCompat("transition_speed", 20).toFloat() / 100f
         userFadeSpeed = 0.0005f + (tSpeed * tSpeed * 0.05f)
 
         val modeName = prefs.getString("blend_mode_name", "Normal")
@@ -196,7 +196,7 @@ class DiffusePreviewView @JvmOverloads constructor(
         isOgDiffuseMode = true
         isOgFluidMode = false
         liquidVariant = 0
-        activeBlobCount = (3 + (prefs.getInt("density", 50).toFloat() / 100f * (BLOB_COUNT - 3))).toInt().coerceIn(3, BLOB_COUNT)
+        activeBlobCount = (3 + (prefs.getIntCompat("density", 50).toFloat() / 100f * (BLOB_COUNT - 3))).toInt().coerceIn(3, BLOB_COUNT)
     }
 
     fun onResume() {
