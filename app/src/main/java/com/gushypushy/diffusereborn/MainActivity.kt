@@ -1,7 +1,6 @@
 package com.gushypushy.diffusereborn
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.NotificationManager
 import android.app.WallpaperManager
 import android.content.BroadcastReceiver
@@ -26,7 +25,6 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.widget.SwitchCompat
@@ -34,6 +32,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.material.color.DynamicColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.slider.Slider
 import org.json.JSONObject
 import java.util.Locale
 
@@ -131,6 +132,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Material You dynamic colors follow the user's system wallpaper/theme on Android 12+.
+        // Older versions simply keep the Material 3 fallback palette from the app theme.
+        DynamicColors.applyToActivityIfAvailable(this)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
@@ -170,15 +174,15 @@ class MainActivity : Activity() {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             content.setPaddingRelative(
-                dp(22) + safe.left,
-                dp(26) + safe.top,
-                dp(22) + safe.right,
-                dp(150) + safe.bottom
+                dp(20) + safe.left,
+                dp(24) + safe.top,
+                dp(20) + safe.right,
+                dp(144) + safe.bottom
             )
             bottomBar.setPaddingRelative(
-                dp(22) + safe.left,
-                dp(18),
-                dp(22) + safe.right,
+                dp(20) + safe.left,
+                dp(14),
+                dp(20) + safe.right,
                 dp(12) + safe.bottom
             )
             insets
@@ -192,25 +196,23 @@ class MainActivity : Activity() {
             val label = row.findViewById<TextView>(R.id.sliderLabel) ?: continue
             val caption = row.findViewById<TextView>(R.id.sliderCaption) ?: continue
             val value = row.findViewById<TextView>(R.id.sliderValue) ?: continue
-            val seek = row.findViewById<SeekBar>(R.id.sliderBar) ?: continue
+            val slider = row.findViewById<Slider>(R.id.sliderBar) ?: continue
 
             label.text = setting.label
             caption.text = setting.caption
             caption.visibility = View.VISIBLE
-            seek.max = setting.max
+            slider.valueFrom = 0f
+            slider.valueTo = setting.max.toFloat()
+            slider.stepSize = 1f
             val current = prefs.getInt(setting.key, setting.defaultValue).coerceIn(0, setting.max)
-            seek.progress = current
+            slider.value = current.toFloat()
             value.text = setting.format(current)
-            seek.contentDescription = setting.label
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    value.text = setting.format(progress)
-                    if (fromUser) prefs.edit().putInt(setting.key, progress).apply()
-                }
-
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
+            slider.contentDescription = setting.label
+            slider.addOnChangeListener { _, rawValue, fromUser ->
+                val progress = rawValue.toInt().coerceIn(0, setting.max)
+                value.text = setting.format(progress)
+                if (fromUser) prefs.edit().putInt(setting.key, progress).apply()
+            }
         }
     }
 
@@ -237,10 +239,10 @@ class MainActivity : Activity() {
     private fun refreshSettingsControls() {
         for (setting in sliderSettings) {
             val row = findViewById<View>(setting.rowId) ?: continue
-            val seek = row.findViewById<SeekBar>(R.id.sliderBar) ?: continue
+            val slider = row.findViewById<Slider>(R.id.sliderBar) ?: continue
             val value = row.findViewById<TextView>(R.id.sliderValue) ?: continue
             val progress = prefs.getInt(setting.key, setting.defaultValue).coerceIn(0, setting.max)
-            if (seek.progress != progress) seek.progress = progress
+            if (slider.value.toInt() != progress) slider.value = progress.toFloat()
             value.text = setting.format(progress)
         }
 
@@ -384,7 +386,7 @@ class MainActivity : Activity() {
         val labels = apps.map { it.label }.toTypedArray()
         val title = if (allowList) "Allow music from" else "Block music from"
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(title)
             .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
                 val packageName = apps[which].packageName
@@ -433,7 +435,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setSingleLine(true)
         }
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Save current settings")
             .setView(input)
             .setNegativeButton("Cancel", null)
@@ -467,7 +469,7 @@ class MainActivity : Activity() {
             return
         }
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Load preset")
             .setItems(names.toTypedArray()) { _, which -> loadPreset(store.getString(names[which], null)) }
             .setNegativeButton("Cancel", null)
@@ -497,7 +499,7 @@ class MainActivity : Activity() {
     }
 
     private fun confirmReset() {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Reset settings?")
             .setMessage("All wallpaper settings and app filters will return to their defaults. Saved presets will stay available.")
             .setNegativeButton("Cancel", null)

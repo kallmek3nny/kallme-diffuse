@@ -3,7 +3,7 @@
     android:id="@+id/rootFrame"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#080A10">
+    android:background="?attr/colorSurface">
 
     <com.gushypushy.diffusereborn.DiffusePreviewView
         android:id="@+id/previewView"
@@ -30,10 +30,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingStart="22dp"
-            android:paddingTop="26dp"
-            android:paddingEnd="22dp"
-            android:paddingBottom="150dp">
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="144dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -41,7 +41,7 @@
                 android:letterSpacing="0.18"
                 android:text="LIVE WALLPAPER"
                 android:textAllCaps="true"
-                android:textColor="#A9C9FF"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="11sp"
                 android:textStyle="bold" />
 
@@ -51,8 +51,8 @@
                 android:layout_marginTop="5dp"
                 android:letterSpacing="-0.025"
                 android:text="Diffuse Reborn"
-                android:textColor="#FFF9FBFF"
-                android:textSize="32sp"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="36sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -61,14 +61,14 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="3dp"
                 android:text="Album color, shaped by sound"
-                android:textColor="#B9C3D2"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
             <LinearLayout
                 android:id="@+id/nowPlayingIsland"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="22dp"
+                android:layout_marginTop="20dp"
                 android:background="@drawable/glass_panel"
                 android:orientation="vertical"
                 android:padding="16dp">
@@ -92,7 +92,7 @@
                         android:letterSpacing="0.12"
                         android:text="NOW PLAYING"
                         android:textAllCaps="true"
-                        android:textColor="#AAB7C9"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="10sp"
                         android:textStyle="bold" />
 
@@ -106,7 +106,7 @@
                         android:paddingEnd="9dp"
                         android:paddingBottom="5dp"
                         android:text="OG DIFFUSE"
-                        android:textColor="#D8E6FF"
+                        android:textColor="?attr/colorOnSecondaryContainer"
                         android:textSize="9sp"
                         android:textStyle="bold" />
                 </LinearLayout>
@@ -142,7 +142,7 @@
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:text="Nothing playing"
-                            android:textColor="#FFF9FBFF"
+                            android:textColor="?attr/colorOnSurface"
                             android:textSize="16sp"
                             android:textStyle="bold" />
 
@@ -154,7 +154,7 @@
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:text="Start music to see its colors here"
-                            android:textColor="#B7C1D0"
+                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="13sp" />
 
                         <LinearLayout
@@ -181,10 +181,10 @@
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="3dp"
                     android:text="Checking notification access…"
-                    android:textColor="#C4CDDA"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnNotifPerm"
                     style="@style/CardButton"
                     android:layout_marginTop="12dp"
@@ -232,7 +232,7 @@
                     android:id="@+id/rowOgStrength"
                     layout="@layout/item_slider" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnAudioPermission"
                     style="@style/CardButton"
                     android:layout_marginTop="8dp"
@@ -344,13 +344,13 @@
                     style="@style/CardCaption"
                     android:text="Choose which apps Diffuse reacts to. With no allow list, every app is considered." />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnWhitelist"
                     style="@style/CardButton"
                     android:layout_marginTop="12dp"
                     android:text="Allowed apps · All" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnBlacklist"
                     style="@style/CardButton"
                     android:layout_marginTop="8dp"
@@ -408,18 +408,18 @@
 
             <LinearLayout style="@style/SettingsCard">
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnSavePreset"
                     style="@style/CardButton"
                     android:text="Save current settings" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnLoadPreset"
                     style="@style/CardButton"
                     android:layout_marginTop="8dp"
                     android:text="Load preset" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnResetAll"
                     style="@style/CardButtonDestructive"
                     android:layout_marginTop="8dp"
@@ -436,12 +436,12 @@
         android:background="@drawable/bottom_action_scrim"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingStart="22dp"
+        android:paddingStart="20dp"
         android:paddingTop="18dp"
-        android:paddingEnd="22dp"
+        android:paddingEnd="20dp"
         android:paddingBottom="12dp">
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSetWallpaper"
             style="@style/CardButtonPrimary"
             android:text="Set as live wallpaper" />
@@ -451,7 +451,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="7dp"
             android:text="Your changes preview behind these controls"
-            android:textColor="#94A0B2"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="11sp" />
     </LinearLayout>
 </FrameLayout>
