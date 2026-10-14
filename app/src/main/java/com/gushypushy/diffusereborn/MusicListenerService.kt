@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.MediaMetadata
+import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
@@ -91,12 +92,35 @@ class MusicListenerService : NotificationListenerService() {
     private var lastNotifyKey: String = ""
     @Volatile private var lastArtworkKey: String = ""
     @Volatile private var pendingArtworkKey: String = ""
+    private var activeController: MediaController? = null
+    private val fallbackPollIntervalMs = 15_000L
+
+    private val controllerCallback = object : MediaController.Callback() {
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            activeController?.let { updateFromController(it) }
+        }
+
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            activeController?.let { updateFromController(it) }
+        }
+
+        override fun onSessionDestroyed() {
+            setActiveController(null)
+            if (isHomeVisible) {
+                handler.post {
+                    if (!checkMediaSession()) checkActiveNotifications()
+                }
+            }
+        }
+    }
 
     private val pollRunner = object : Runnable {
         override fun run() {
             if (!isHomeVisible) return
             if (!checkMediaSession()) checkActiveNotifications()
-            handler.postDelayed(this, 1000)
+            // Event callbacks handle normal metadata/playback changes. This slow poll is only
+            // a safety net for media apps that do not reliably publish callbacks.
+            handler.postDelayed(this, fallbackPollIntervalMs)
         }
     }
 
@@ -132,6 +156,18 @@ class MusicListenerService : NotificationListenerService() {
 
     fun stopPolling() {
         handler.removeCallbacks(pollRunner)
+        setActiveController(null)
+    }
+
+    private fun setActiveController(controller: MediaController?) {
+        val currentToken = activeController?.sessionToken
+        val newToken = controller?.sessionToken
+        if (currentToken == newToken) return
+        runCatching { activeController?.unregisterCallback(controllerCallback) }
+        activeController = controller
+        if (controller != null) {
+            runCatching { controller.registerCallback(controllerCallback, handler) }
+        }
     }
 
     private fun isPackageAllowed(pkg: String): Boolean {
@@ -215,6 +251,13 @@ class MusicListenerService : NotificationListenerService() {
         }
     }
 
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        if (!isHomeVisible) return
+        handler.post {
+            if (!checkMediaSession()) checkActiveNotifications()
+        }
+    }
+
     private fun checkActiveNotifications() {
         try {
             val notifications = activeNotifications
@@ -227,6 +270,38 @@ class MusicListenerService : NotificationListenerService() {
         }
     }
 
+    private fun updateFromController(controller: MediaController): Boolean {
+        if (!isPackageAllowed(controller.packageName)) return false
+
+        val pkg = controller.packageName
+        val state = controller.playbackState?.state ?: PlaybackState.STATE_NONE
+        val isPlaying = state == PlaybackState.STATE_PLAYING
+        val metadata = controller.metadata ?: return false
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
+        val album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: ""
+
+        if (title.isNotEmpty()) {
+            currentPackageName = pkg
+            currentTitle = title
+            currentArtist = artist
+            currentAlbum = album
+            currentIsPlaying = isPlaying
+            notifyMetadataChangedIfNeeded()
+        }
+
+        val bitmap = try {
+            metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
+        } catch (_: SecurityException) {
+            null
+        }
+        if (bitmap != null && !bitmap.isRecycled) processBitmapFast(bitmap)
+
+        // A session can have fresh text but no image. Keep notification fallback available then.
+        return title.isNotEmpty() && bitmap != null && !bitmap.isRecycled
+    }
+
     private fun checkMediaSession(): Boolean {
         try {
             val manager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -235,41 +310,10 @@ class MusicListenerService : NotificationListenerService() {
 
             for (controller in controllers) {
                 if (!isPackageAllowed(controller.packageName)) continue
-
-                val pkg = controller.packageName
-                val state = controller.playbackState?.state ?: PlaybackState.STATE_NONE
-                val isPlaying = state == PlaybackState.STATE_PLAYING
-
-                val metadata = controller.metadata
-                if (metadata != null) {
-                    val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
-                    val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
-                    val album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: ""
-
-                    if (title.isNotEmpty()) {
-                        currentPackageName = pkg
-                        currentTitle = title
-                        currentArtist = artist
-                        currentAlbum = album
-                        currentIsPlaying = isPlaying
-                        notifyMetadataChangedIfNeeded()
-                    }
-
-                    val bitmap = try {
-                        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-                            ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-                    } catch (e: SecurityException) {
-                        null
-                    }
-
-                    if (bitmap != null && !bitmap.isRecycled) {
-                        processBitmapFast(bitmap)
-                    }
-                    // A session can have fresh track text but omit its image. Let the notification
-                    // fallback supply artwork in that case so the renderer can recolor immediately.
-                    return title.isNotEmpty() && bitmap != null && !bitmap.isRecycled
-                }
+                if (isHomeVisible) setActiveController(controller)
+                if (updateFromController(controller)) return true
             }
+            if (isHomeVisible) setActiveController(null)
         } catch (e: Exception) {
             e.printStackTrace()
         }

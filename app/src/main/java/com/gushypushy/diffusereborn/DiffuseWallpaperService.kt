@@ -107,7 +107,8 @@ class DiffuseWallpaperService : WallpaperService() {
                 float v = 0.0;
                 float a = 0.5;
                 float2 shift = st * 0.5;
-                float2x2 rot = float2x2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+                // Constant-fold the fixed rotation explicitly so every FBM call avoids trig setup.
+                float2x2 rot = float2x2(0.87758256, 0.47942554, -0.47942554, 0.87758256);
                 for (int i = 0; i < 3; ++i) {
                     v += a * noise(st);
                     st = rot * st * 1.3 + shift;
@@ -289,6 +290,10 @@ class DiffuseWallpaperService : WallpaperService() {
         private var centerArtScale = 1.0f
         private var centerArtBitmap: Bitmap? = null
         private var lastProcessedArt: Bitmap? = null
+        private val centerArtExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        private val centerArtHandler = Handler(Looper.getMainLooper())
+        @Volatile private var centerArtBuildSource: Bitmap? = null
+        @Volatile private var centerArtBuildBlur = Float.NaN
         private val centerArtPaint = Paint().apply {
             isAntiAlias = true
             isFilterBitmap = true
@@ -644,6 +649,9 @@ class DiffuseWallpaperService : WallpaperService() {
                 stopDrawing()
                 if (::baseBlob.isInitialized) baseBlob.recycle()
                 vignetteBitmap?.recycle()
+                centerArtExecutor.shutdownNow()
+                centerArtHandler.removeCallbacksAndMessages(null)
+                centerArtBuildSource = null
                 centerArtBitmap?.recycle()
                 ogBackdropBitmap?.recycle()
                 // Stop the field worker before recycling its output targets, otherwise an in-flight
@@ -684,6 +692,9 @@ class DiffuseWallpaperService : WallpaperService() {
         override fun onSurfaceCreated(holder: android.view.SurfaceHolder?) {
             super.onSurfaceCreated(holder)
             if (isVisible) {
+                // updateSettings() may have selected 120 Hz before the Surface existed. Force the
+                // frame-rate request again now that Android has a valid presentation surface.
+                updateTargetFrameRate(force = true)
                 trySetupVisualizer()
                 startDrawing()
             }
@@ -693,6 +704,7 @@ class DiffuseWallpaperService : WallpaperService() {
             super.onSurfaceDestroyed(holder)
             stopVisualizer()
             stopDrawing()
+            clearSurfaceFrameRateRequest()
         }
 
         private fun createBaseBlob() {
@@ -1000,6 +1012,11 @@ class DiffuseWallpaperService : WallpaperService() {
             centerArtOpacity = (prefs.getInt("center_opacity", 100).toFloat() / 100f * 255).toInt()
             centerArtScale = 0.5f + (prefs.getInt("center_size", 50).toFloat() / 50f)
             lastProcessedArt = null
+            if (!isCenterArtEnabled) {
+                centerArtBuildSource = null
+                centerArtBitmap?.let { if (!it.isRecycled) it.recycle() }
+                centerArtBitmap = null
+            }
 
             // --- Smart rendering / system ---
             isAdaptiveFpsEnabled = prefs.getBoolean("adaptive_fps", true)
@@ -1069,6 +1086,19 @@ class DiffuseWallpaperService : WallpaperService() {
                     val surface = surfaceHolder.surface
                     if (surface != null && surface.isValid) {
                         surface.setFrameRate(TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        private fun clearSurfaceFrameRateRequest() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    val surface = surfaceHolder.surface
+                    if (surface != null && surface.isValid) {
+                        // 0 tells Android this surface no longer has a preferred frame rate. This
+                        // lets the display drop refresh while the wallpaper is hidden.
+                        surface.setFrameRate(0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                     }
                 } catch (_: Exception) {}
             }
@@ -1158,12 +1188,15 @@ class DiffuseWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             if (visible) {
                 MusicListenerService.setHomeState(true)
+                // Re-assert the target when the wallpaper becomes the presented surface again.
+                updateTargetFrameRate(force = true)
                 trySetupVisualizer()
                 startDrawing()
             } else {
                 MusicListenerService.setHomeState(false)
                 stopVisualizer()
                 stopDrawing()
+                clearSurfaceFrameRateRequest()
             }
         }
 
@@ -2586,6 +2619,53 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
+        private fun ensureCenterArtPrepared(currentArt: Bitmap?) {
+            if (!isCenterArtEnabled || currentArt == null || currentArt.isRecycled) return
+            val blur = centerArtBlur
+            val ready = centerArtBitmap
+            if (currentArt === lastProcessedArt && ready != null && !ready.isRecycled) return
+            if (centerArtBuildSource === currentArt && abs(centerArtBuildBlur - blur) < 0.0001f) return
+
+            centerArtBuildSource = currentArt
+            centerArtBuildBlur = blur
+            centerArtExecutor.execute {
+                var tiny: Bitmap? = null
+                var built: Bitmap? = null
+                try {
+                    built = if (blur < 0.05f) {
+                        Bitmap.createScaledBitmap(currentArt, 1200, 1200, true)
+                    } else {
+                        val blurFactor = 1f - (blur * 0.95f)
+                        val targetW = (currentArt.width * blurFactor).toInt().coerceAtLeast(10)
+                        val targetH = (currentArt.height * blurFactor).toInt().coerceAtLeast(10)
+                        tiny = Bitmap.createScaledBitmap(currentArt, targetW, targetH, true)
+                        Bitmap.createScaledBitmap(tiny!!, 1000, 1000, true)
+                    }
+                } catch (_: Exception) {
+                    built = null
+                } finally {
+                    tiny?.let { if (it !== built && !it.isRecycled) it.recycle() }
+                }
+
+                centerArtHandler.post {
+                    val stillWanted = isCenterArtEnabled &&
+                            centerArtBuildSource === currentArt &&
+                            abs(centerArtBuildBlur - blur) < 0.0001f &&
+                            !currentArt.isRecycled
+                    if (!stillWanted) {
+                        built?.let { if (!it.isRecycled) it.recycle() }
+                        return@post
+                    }
+
+                    centerArtBuildSource = null
+                    val old = centerArtBitmap
+                    centerArtBitmap = built
+                    if (built != null) lastProcessedArt = currentArt
+                    old?.let { if (it !== built && !it.isRecycled) it.recycle() }
+                }
+            }
+        }
+
         private fun draw() {
             val holder = surfaceHolder
             var canvas: Canvas? = null
@@ -2669,29 +2749,14 @@ class DiffuseWallpaperService : WallpaperService() {
                 run {
                     // --- CENTER ART ---
                     if (isCenterArtEnabled) {
-                        val currentArt = MusicListenerService.currentAlbumArt
-                        if (currentArt != null && (currentArt != lastProcessedArt || centerArtBitmap == null)) {
-                            lastProcessedArt = currentArt
-                            try {
-                                if (centerArtBlur < 0.05f) {
-                                    centerArtBitmap = Bitmap.createScaledBitmap(currentArt, 1200, 1200, true)
-                                } else {
-                                    val blurFactor = 1f - (centerArtBlur * 0.95f)
-                                    val targetW = (currentArt.width * blurFactor).toInt().coerceAtLeast(10)
-                                    val targetH = (currentArt.height * blurFactor).toInt().coerceAtLeast(10)
-                                    val tiny = Bitmap.createScaledBitmap(currentArt, targetW, targetH, true)
-                                    centerArtBitmap = Bitmap.createScaledBitmap(tiny, 1000, 1000, true)
-                                    if (tiny != centerArtBitmap && !tiny.isRecycled) tiny.recycle()
-                                }
-                            } catch (e: Exception) { e.printStackTrace() }
-                        }
-
-                        if (centerArtBitmap != null) {
+                        ensureCenterArtPrepared(MusicListenerService.currentAlbumArt)
+                        val preparedCenterArt = centerArtBitmap
+                        if (preparedCenterArt != null && !preparedCenterArt.isRecycled) {
                             val drawSize = 800f * centerArtScale
                             val halfSize = drawSize / 2f
                             centerArtPaint.alpha = centerArtOpacity
                             destRect.set(cx - halfSize, cy - halfSize, cx + halfSize, cy + halfSize)
-                            canvas.drawBitmap(centerArtBitmap!!, null, destRect, centerArtPaint)
+                            canvas.drawBitmap(preparedCenterArt, null, destRect, centerArtPaint)
                         }
                     }
 
