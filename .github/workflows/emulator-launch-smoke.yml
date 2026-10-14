@@ -50,23 +50,17 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            set +e
-            APK="app/build/outputs/apk/debug/app-debug.apk"
-            adb install -r "$APK"
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
             adb shell am force-stop com.gushypushy.diffusereborn
             echo '=== LAUNCHING MAIN ACTIVITY ==='
-            adb shell am start -W -n com.gushypushy.diffusereborn/.MainActivity
+            adb shell am start -W -n com.gushypushy.diffusereborn/.MainActivity || true
             sleep 6
             echo '=== PROCESS STATE ==='
             adb shell pidof com.gushypushy.diffusereborn || true
             echo '=== CRASH / ANDROIDRUNTIME LOGS ==='
-            adb logcat -d -v threadtime AndroidRuntime:E ActivityTaskManager:E ActivityManager:E '*:S' | tail -n 300
+            adb logcat -d -v threadtime AndroidRuntime:E ActivityTaskManager:E ActivityManager:E '*:S' | tail -n 300 || true
             echo '=== APP-SCOPED LOG LINES ==='
             adb logcat -d -v threadtime | grep -i -E 'diffusereborn|FATAL EXCEPTION|AndroidRuntime|InflateException|ClassCastException|IllegalStateException|Resources.NotFoundException|Theme' | tail -n 400 || true
-            PID=$(adb shell pidof com.gushypushy.diffusereborn | tr -d '\r')
-            if [ -z "$PID" ]; then
-              echo 'APP_PROCESS_NOT_ALIVE_AFTER_LAUNCH'
-              exit 1
-            fi
-            exit 0
+            echo '=== VERIFY PROCESS ALIVE ==='
+            adb shell pidof com.gushypushy.diffusereborn
