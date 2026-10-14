@@ -1,0 +1,71 @@
+name: Apply wavier diffuse renderer
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-wavier-renderer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  wavy-renderer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply wavier diffuse shader
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''                uv += artOffset;\n                float2 q = float2(fbm(uv + float2(timeScaled * 0.1, cos(timeScaled))),\n                                  fbm(uv + float2(timeScaled * 0.1, timeScaled)));\n                float2 r = float2(fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),\n                                  fbm(0.5 * uv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));\n                r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);'''
+
+          new = '''                uv += artOffset;\n\n                // Broad low-frequency wave warp. FBM supplies the fine organic motion, while these\n                // travelling curves keep dark / low-detail artwork visibly fluid instead of flat.\n                float waveTime = timeScaled * 0.9;\n                float waveX = sin(uv.y * 5.2 + waveTime * 1.45) * 0.050\n                            + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018;\n                float waveY = sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042\n                            + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015;\n                float2 waveUv = uv + float2(waveX, waveY);\n\n                float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),\n                                  fbm(waveUv + float2(timeScaled * 0.1, timeScaled)));\n                float2 r = float2(fbm(0.5 * waveUv + 2.0 * q + float2(timeScaled * 0.05, 0.0)),\n                                  fbm(0.5 * waveUv + 2.0 * q + float2(timeScaled * 0.1, 0.0)));\n\n                // A second, smaller bend turns the blurred colour field into broad S-shaped ribbons.\n                // Mids gently deepen the bend without making quiet songs twitchy.\n                float ribbonX = sin((r.y + q.x * 0.32) * 8.0 - waveTime * 1.25) *\n                                (0.024 + mids * 0.012);\n                float ribbonY = sin((r.x - q.y * 0.28) * 7.0 + waveTime * 1.05 + 1.1) *\n                                (0.018 + mids * 0.009);\n                r += float2(ribbonX, ribbonY);\n                r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);'''
+
+          if new in text:
+              raise SystemExit("wavy shader already applied")
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected one shader target, found {count}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Commit wavier renderer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt
+          git commit -m "feat: make diffuse renderer more wavy"
+          git push origin HEAD:main
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kallme-diffuse-wavier-renderer-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
