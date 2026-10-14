@@ -514,6 +514,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var edgeGlowWidth = 0
         private var edgeGlowHeight = 0
         private var edgeGlowPaletteHash = Int.MIN_VALUE
+        private var edgeGlowLowPower = false
         private var edgeGlowDepth = 0f
         private val ogOverlayPaint = Paint().apply {
             isAntiAlias = false
@@ -2395,15 +2396,23 @@ class DiffuseWallpaperService : WallpaperService() {
         }
 
 
+        private fun isLowPowerGlowMode(): Boolean {
+            return isPowerSaver || systemPowerSaveMode ||
+                    (isBatteryIntelligenceEnabled && !batteryCharging && batteryPercent <= 20)
+        }
+
         private fun ensureEdgeGlowShaders(w: Float, h: Float) {
             val paletteHash = targetColors.hashCode()
             val width = w.toInt()
             val height = h.toInt()
-            if (edgeGlowWidth == width && edgeGlowHeight == height && edgeGlowPaletteHash == paletteHash) return
+            val lowPower = isLowPowerGlowMode()
+            if (edgeGlowWidth == width && edgeGlowHeight == height &&
+                edgeGlowPaletteHash == paletteHash && edgeGlowLowPower == lowPower) return
             edgeGlowWidth = width
             edgeGlowHeight = height
             edgeGlowPaletteHash = paletteHash
-            edgeGlowDepth = min(w, h) * 0.13f
+            edgeGlowLowPower = lowPower
+            edgeGlowDepth = min(w, h) * if (lowPower) 0.085f else 0.13f
             val top = applyTuning(targetColors.getOrElse(0) { Color.WHITE })
             val right = applyTuning(targetColors.getOrElse(1) { top })
             val bottom = applyTuning(targetColors.getOrElse(2) { right })
@@ -2421,7 +2430,11 @@ class DiffuseWallpaperService : WallpaperService() {
             ensureEdgeGlowShaders(w, h)
             val high = if (isBeatZonesEnabled) trebleEnergy else 0f
             val pulse = (bassEnergy * userBeatPulse * 0.35f + high * 0.75f).coerceIn(0f, 1f)
-            val alpha = (34f + pulse * 86f).toInt().coerceIn(24, 120)
+            val alpha = if (isLowPowerGlowMode()) {
+                (16f + pulse * 38f).toInt().coerceIn(10, 54)
+            } else {
+                (34f + pulse * 86f).toInt().coerceIn(24, 120)
+            }
             edgeGlowTopPaint.alpha = alpha
             edgeGlowRightPaint.alpha = alpha
             edgeGlowBottomPaint.alpha = alpha
