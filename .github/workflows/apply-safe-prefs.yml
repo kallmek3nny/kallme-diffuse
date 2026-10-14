@@ -1,0 +1,89 @@
+name: Apply legacy preference safety fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-safe-prefs.yml'
+      - '.github/scripts/safe_prefs_patch.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Apply compatibility patch
+        run: python .github/scripts/safe_prefs_patch.py
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Android 16 poisoned-preference launch test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            printf '%s\n' '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' '<map>' '    <float name="og_speed" value="73.0" />' '    <string name="og_scale">61</string>' '    <long name="og_strength" value="88" />' '    <float name="sat" value="44.0" />' '    <string name="bright">57.0</string>' '    <string name="hue_shift">12</string>' '    <float name="transition_speed" value="20.0" />' '    <string name="density">50</string>' '    <string name="adaptive_fps">true</string>' '    <int name="center_art_on" value="0" />' '</map>' > /tmp/diffuse_prefs.xml
+            adb push /tmp/diffuse_prefs.xml /data/local/tmp/diffuse_prefs.xml
+            adb shell run-as com.gushypushy.diffusereborn mkdir -p shared_prefs
+            adb shell run-as com.gushypushy.diffusereborn cp /data/local/tmp/diffuse_prefs.xml shared_prefs/diffuse_prefs.xml
+            adb shell am force-stop com.gushypushy.diffusereborn
+            adb logcat -c
+            adb shell am start -W -n com.gushypushy.diffusereborn/.MainActivity
+            sleep 6
+            echo '=== PROCESS ==='
+            adb shell pidof com.gushypushy.diffusereborn
+            echo '=== CRASH LOGS ==='
+            adb logcat -d -v threadtime AndroidRuntime:E '*:S' | tail -n 200 || true
+            echo '=== NORMALIZED PREFS ==='
+            adb shell run-as com.gushypushy.diffusereborn cat shared_prefs/diffuse_prefs.xml || true
+
+      - name: Commit compatibility fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/gushypushy/diffusereborn/PreferenceCompat.kt \
+                  app/src/main/java/DiffusePreviewView.kt \
+                  app/src/main/java/com/gushypushy/diffusereborn/MainActivity.kt \
+                  app/src/main/java/com/gushypushy/diffusereborn/ClassicActivity.kt \
+                  app/src/main/java/com/gushypushy/diffusereborn/DiffuseWallpaperService.kt
+          git diff --cached --quiet && { echo 'No compatibility changes staged'; exit 1; }
+          git commit -m 'fix: migrate legacy preference value types safely'
+          git push origin HEAD:main
