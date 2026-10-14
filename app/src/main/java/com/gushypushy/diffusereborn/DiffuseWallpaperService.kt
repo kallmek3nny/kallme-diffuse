@@ -159,8 +159,12 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 // Sample a nearby version of the same colour field and fold it back into the
                 // primary sample. This creates depth without another expensive noise octave.
-                float2 depthR = clamp(r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035), 0.0, 1.0);
-                float2 tc = clamp(r, 0.0, 1.0) * fieldRes;
+                // Mirror coordinates at the texture boundary instead of hard-clamping them.
+                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.
+                float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);
+                float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
+                float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);
+                float2 tc = sampleR * fieldRes;
                 float2 depthTc = depthR * fieldRes;
                 float depthMix = 0.10 + mids * 0.09;
                 half4 col = field.eval(tc);
@@ -2437,7 +2441,8 @@ class DiffuseWallpaperService : WallpaperService() {
             val left = applyTuning(targetColors.getOrElse(3) { top })
             fun transparent(color: Int) = Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
             edgeGlowTopPaint.shader = LinearGradient(0f, 0f, 0f, edgeGlowDepth, top, transparent(top), Shader.TileMode.CLAMP)
-            edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - edgeGlowDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)
+            val rightDepth = edgeGlowDepth * 1.22f
+            edgeGlowRightPaint.shader = LinearGradient(w, 0f, w - rightDepth, 0f, right, transparent(right), Shader.TileMode.CLAMP)
             edgeGlowBottomPaint.shader = LinearGradient(0f, h, 0f, h - edgeGlowDepth, bottom, transparent(bottom), Shader.TileMode.CLAMP)
             edgeGlowLeftPaint.shader = LinearGradient(0f, 0f, edgeGlowDepth, 0f, left, transparent(left), Shader.TileMode.CLAMP)
         }
@@ -2454,12 +2459,13 @@ class DiffuseWallpaperService : WallpaperService() {
                 (34f + pulse * 86f).toInt().coerceIn(24, 120)
             }
             edgeGlowTopPaint.alpha = alpha
-            edgeGlowRightPaint.alpha = alpha
+            edgeGlowRightPaint.alpha = (alpha * 0.68f).toInt().coerceAtLeast(1)
             edgeGlowBottomPaint.alpha = alpha
             edgeGlowLeftPaint.alpha = alpha
             val depth = edgeGlowDepth
+            val rightDepth = depth * 1.22f
             canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)
-            canvas.drawRect(w - depth, 0f, w, h, edgeGlowRightPaint)
+            canvas.drawRect(w - rightDepth, 0f, w, h, edgeGlowRightPaint)
             canvas.drawRect(0f, h - depth, w, h, edgeGlowBottomPaint)
             canvas.drawRect(0f, 0f, depth, h, edgeGlowLeftPaint)
         }
