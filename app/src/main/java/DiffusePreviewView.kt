@@ -92,6 +92,7 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var ogPreviewStrength = 1.0f
     private var ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
     private var ogPreviewFlowSpeed = 1f
+    private var ogPreviewVortex = 0f
 
     init {
         for (i in 0 until BLOB_COUNT) {
@@ -173,6 +174,7 @@ class DiffusePreviewView @JvmOverloads constructor(
         val fluiditySetting = prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
         ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(fluiditySetting)
         ogPreviewFlowSpeed = RenderTuningDefaults.fluidityMotionMultiplier(fluiditySetting)
+        ogPreviewVortex = RenderTuningDefaults.vortexStrength(fluiditySetting)
 
         userSat = (prefs.getIntCompat("sat", 50).toFloat() / 50f) * 1.25f
         userBright = (prefs.getIntCompat("bright", 50).toFloat() / 50f) * 1.0f
@@ -550,6 +552,22 @@ class DiffusePreviewView @JvmOverloads constructor(
         drawOgEllipse(canvas, screenW * (0.94f + sin(p * 0.7f) * 0.020f * flow), screenH * (0.76f + cos(p * 1.1f) * 0.026f * flow), screenW * 0.78f * scale, screenH * 0.52f * scale, counter, baseAlpha - 6, 0.54f)
         drawOgEllipse(canvas, screenW * (0.46f + sin(p * 0.6f) * 0.030f * flow), screenH * (1.06f + cos(p * 0.8f) * 0.018f * flow), screenW * 0.96f * scale, screenH * 0.48f * scale, secondCounter, baseAlpha - 10, 0.58f)
         drawOgEllipse(canvas, screenW * (0.54f + cos(p * 1.4f) * 0.025f * flow), screenH * (0.36f + sin(p * 1.0f) * 0.030f * flow), screenW * 0.58f * scale, screenH * 0.34f * scale, glow, baseAlpha - 18, 0.42f)
+
+        // Preview the additional rolling vortex only at advanced fluidity.
+        // Reuses the same soft gradient helper; none of the default preview changes.
+        if (ogPreviewVortex > 0f) {
+            val curl = ogPreviewVortex
+            drawOgEllipse(
+                canvas,
+                screenW * (0.50f + sin(p * 0.75f) * 0.25f * curl),
+                screenH * (0.52f + cos(p * 0.60f) * 0.17f * curl),
+                screenW * (0.42f + curl * 0.13f),
+                screenH * (0.30f + curl * 0.12f),
+                counter,
+                (baseAlpha * curl * 0.38f).toInt().coerceIn(0, 255),
+                0.53f
+            )
+        }
     }
 
     private fun drawOgRibbon(

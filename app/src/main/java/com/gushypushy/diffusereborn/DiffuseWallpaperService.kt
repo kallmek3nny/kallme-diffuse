@@ -83,6 +83,7 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float border;
             uniform float fluidity;
             uniform float extraCurl;
+            uniform float vortexStrength;
             uniform float2 artMotion;
             uniform float bass;
             uniform float mids;
@@ -143,6 +144,17 @@ class DiffuseWallpaperService : WallpaperService() {
                 float waveY = (sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
                              + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015) * fluidity;
                 float2 waveUv = uv + float2(waveX, waveY);
+
+                // A travelling vortex turns the field through broad, smooth arcs.
+                // This operates on UVs before the existing FBM, without adding any
+                // new noise iterations or field texture fetches. Zero at <=70%.
+                float2 vortexCenter = float2(
+                    0.54 + sin(waveTime * 0.31) * 0.20,
+                    0.76 + cos(waveTime * 0.27) * 0.19
+                );
+                float2 delta = waveUv - vortexCenter;
+                float vortexFalloff = 1.0 / (1.0 + dot(delta, delta) * 3.5);
+                waveUv += float2(-delta.y, delta.x) * (0.42 * vortexStrength * vortexFalloff);
 
                 float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),
                                   fbm(waveUv + float2(timeScaled * 0.1, timeScaled)));
@@ -556,6 +568,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
         private var ogUserFlowSpeed = 1f
         private var ogUserExtraCurl = 0f
+        private var ogUserVortex = 0f
         private var artworkMotionSpeed = 1f
         private var artworkMotionTargetSpeed = 1f
         private var artworkMotionBiasX = 0f
@@ -1039,6 +1052,7 @@ class DiffuseWallpaperService : WallpaperService() {
             ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(fluiditySetting)
             ogUserFlowSpeed = RenderTuningDefaults.fluidityMotionMultiplier(fluiditySetting)
             ogUserExtraCurl = RenderTuningDefaults.extraCurl(fluiditySetting)
+            ogUserVortex = RenderTuningDefaults.vortexStrength(fluiditySetting)
             ogUserStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f)
 
             // --- Reactivity ---
@@ -1981,6 +1995,7 @@ class DiffuseWallpaperService : WallpaperService() {
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
             shader.setFloatUniform("fluidity", ogUserFluidity)
             shader.setFloatUniform("extraCurl", ogUserExtraCurl)
+            shader.setFloatUniform("vortexStrength", ogUserVortex)
             shader.setFloatUniform("bass", if (isBeatZonesEnabled) bassEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("mids", if (isBeatZonesEnabled) midEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("highs", if (isBeatZonesEnabled) trebleEnergy.coerceIn(0f, 1f) else 0f)
