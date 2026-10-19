@@ -3,6 +3,7 @@ package com.gushypushy.diffusereborn
 import androidx.appcompat.app.AppCompatActivity
 import android.app.NotificationManager
 import android.app.WallpaperManager
+import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -20,6 +21,9 @@ import android.transition.AutoTransition
 import android.transition.TransitionManager
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
@@ -162,6 +166,75 @@ class MainActivity : AppCompatActivity() {
         refreshNowPlaying()
         refreshPermissionState()
         updateSourceButtonLabels()
+        installMicroInteractions()
+        animateInitialEntrance()
+    }
+
+    private fun animationsEnabled(): Boolean = ValueAnimator.areAnimatorsEnabled()
+
+    private fun animateInitialEntrance() {
+        if (!animationsEnabled()) return
+        val container = findViewById<LinearLayout>(R.id.mainContainer)
+        container.post {
+            if (isFinishing || isDestroyed) return@post
+            // Intro only for near-viewport content. Offscreen settings remain immediately usable.
+            val count = minOf(7, container.childCount)
+            for (index in 0 until count) {
+                val item = container.getChildAt(index)
+                item.animate().cancel()
+                item.alpha = 0f
+                item.translationY = dp(12).toFloat()
+                item.animate().alpha(1f).translationY(0f)
+                    .setStartDelay(index * 38L).setDuration(320L)
+                    .setInterpolator(AccelerateDecelerateInterpolator()).start()
+            }
+        }
+    }
+
+    private fun installMicroInteractions() {
+        if (!animationsEnabled()) return
+        val root = findViewById<ViewGroup>(R.id.rootFrame)
+        fun visit(group: ViewGroup) {
+            for (i in 0 until group.childCount) {
+                when (val child = group.getChildAt(i)) {
+                    is com.google.android.material.button.MaterialButton -> {
+                        child.setOnTouchListener { button, event ->
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    button.animate().cancel()
+                                    button.animate().scaleX(0.985f).scaleY(0.985f)
+                                        .setDuration(90L)
+                                        .setInterpolator(AccelerateDecelerateInterpolator()).start()
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    button.animate().cancel()
+                                    button.animate().scaleX(1f).scaleY(1f)
+                                        .setDuration(210L)
+                                        .setInterpolator(OvershootInterpolator(1.4f)).start()
+                                }
+                            }
+                            false // Keep Material ripple, touch/click actions and accessibility.
+                        }
+                    }
+                    is ViewGroup -> visit(child)
+                }
+            }
+        }
+        visit(root)
+    }
+
+    private fun animateTextIfChanged(view: TextView, newText: String) {
+        if (view.text.toString() == newText) return
+        view.animate().cancel()
+        if (!animationsEnabled() || !view.isAttachedToWindow) {
+            view.text = newText
+            view.alpha = 1f
+            return
+        }
+        view.animate().alpha(0.38f).setDuration(95L).withEndAction {
+            view.text = newText
+            view.animate().alpha(1f).setDuration(190L).start()
+        }.start()
     }
 
     private fun installWindowInsets() {
@@ -213,6 +286,19 @@ class MainActivity : AppCompatActivity() {
                 value.text = setting.format(progress)
                 if (fromUser) prefs.edit().putInt(setting.key, progress).apply()
             }
+            slider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+                override fun onStartTrackingTouch(slider: Slider) {
+                    if (animationsEnabled()) {
+                        value.animate().cancel()
+                        value.animate().scaleX(1.08f).scaleY(1.08f).setDuration(150L).start()
+                    }
+                }
+                override fun onStopTrackingTouch(slider: Slider) {
+                    value.animate().cancel()
+                    value.animate().scaleX(1f).scaleY(1f)
+                        .setDuration(220L).setInterpolator(OvershootInterpolator(1.2f)).start()
+                }
+            })
         }
     }
 
@@ -264,7 +350,8 @@ class MainActivity : AppCompatActivity() {
         if (animate) {
             TransitionManager.beginDelayedTransition(
                 findViewById(R.id.mainContainer),
-                AutoTransition().setDuration(180L)
+                AutoTransition().setDuration(260L)
+                    .setInterpolator(AccelerateDecelerateInterpolator())
             )
         }
         group.visibility = targetVisibility
@@ -331,20 +418,28 @@ class MainActivity : AppCompatActivity() {
     private fun refreshNowPlaying() {
         val rawTitle = MusicListenerService.currentTitle.trim()
         val waiting = rawTitle.isBlank() || rawTitle == "Diffuse Reborn" || rawTitle == "Waiting for music..."
-        titleView.text = if (waiting) "Nothing playing" else rawTitle
+        animateTextIfChanged(titleView, if (waiting) "Nothing playing" else rawTitle)
 
         val artist = MusicListenerService.currentArtist.trim()
-        artistView.text = when {
+        animateTextIfChanged(artistView, when {
             waiting -> "Start music to see its colors here"
             artist.isBlank() || artist == "Waiting for music..." -> "Now playing"
             MusicListenerService.currentIsPlaying -> artist
             else -> "$artist  ·  Paused"
-        }
+        })
 
         val art = MusicListenerService.currentAlbumArt?.takeUnless { it.isRecycled }
         if (art !== lastArtwork) {
+            albumArtView.animate().cancel()
             if (art == null) albumArtView.setImageResource(R.drawable.ic_music_placeholder)
             else albumArtView.setImageBitmap(art)
+            if (animationsEnabled()) {
+                albumArtView.alpha = 0.65f
+                albumArtView.scaleX = 0.96f
+                albumArtView.scaleY = 0.96f
+                albumArtView.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                    .setDuration(320L).setInterpolator(AccelerateDecelerateInterpolator()).start()
+            }
             lastArtwork = art
         }
 
@@ -370,6 +465,14 @@ class MainActivity : AppCompatActivity() {
                 if (index > 0) marginStart = dp(6)
             }
             paletteSwatches.addView(swatch, params)
+            if (animationsEnabled()) {
+                swatch.alpha = 0f
+                swatch.scaleX = 0.6f
+                swatch.scaleY = 0.6f
+                swatch.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                    .setStartDelay(index * 42L).setDuration(240L)
+                    .setInterpolator(OvershootInterpolator(1.05f)).start()
+            }
         }
     }
 
