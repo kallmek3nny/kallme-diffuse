@@ -80,6 +80,7 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float timeScaled;
             uniform float scale;
             uniform float border;
+            uniform float fluidity;
             uniform float2 artMotion;
             uniform float bass;
             uniform float mids;
@@ -133,10 +134,12 @@ class DiffuseWallpaperService : WallpaperService() {
                 // Broad low-frequency wave warp. FBM supplies the fine organic motion, while these
                 // travelling curves keep dark / low-detail artwork visibly fluid instead of flat.
                 float waveTime = timeScaled * 0.9;
-                float waveX = sin(uv.y * 5.2 + waveTime * 1.45) * 0.050
-                            + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018;
-                float waveY = sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
-                            + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015;
+                // Multiplying the travelling waves (not the texture UVs) yields more
+                // flowing movement without exposing hard, repeated screen-edge bands.
+                float waveX = (sin(uv.y * 5.2 + waveTime * 1.45) * 0.050
+                             + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018) * fluidity;
+                float waveY = (sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
+                             + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015) * fluidity;
                 float2 waveUv = uv + float2(waveX, waveY);
 
                 float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),
@@ -150,7 +153,7 @@ class DiffuseWallpaperService : WallpaperService() {
                                 (0.024 + mids * 0.012);
                 float ribbonY = sin((r.x - q.y * 0.28) * 7.0 + waveTime * 1.05 + 1.1) *
                                 (0.018 + mids * 0.009);
-                r += float2(ribbonX, ribbonY);
+                r += float2(ribbonX, ribbonY) * fluidity;
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
 
                 // A tiny radial elastic deformation makes bass hits feel physical instead of
@@ -512,6 +515,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
         private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
         private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
+        private var ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
         private var artworkMotionSpeed = 1f
         private var artworkMotionTargetSpeed = 1f
         private var artworkMotionBiasX = 0f
@@ -982,7 +986,10 @@ class DiffuseWallpaperService : WallpaperService() {
             // speed:    scales the timeSpeed target; 50 == the original's stock playing rate.
             // strength: amplitude of the beat-driven u_border zoom.
             ogUserScale = (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f + 0.4f
-            ogUserSpeed = (prefs.getIntCompat("og_speed", 50).toFloat() / 50f)
+            ogUserSpeed = (prefs.getIntCompat("og_speed", RenderTuningDefaults.SPEED).toFloat() / 50f)
+            ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(
+                prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
+            )
             ogUserStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f)
 
             // --- Reactivity ---
@@ -1023,7 +1030,7 @@ class DiffuseWallpaperService : WallpaperService() {
             isArtworkMotionEnabled = prefs.getBooleanCompat("art_motion", true)
             isBeatZonesEnabled = prefs.getBooleanCompat("beat_zones", true)
             isBatteryIntelligenceEnabled = prefs.getBooleanCompat("battery_intelligence", true)
-            isEdgeGlowEnabled = prefs.getBooleanCompat("edge_glow", true)
+            isEdgeGlowEnabled = prefs.getBooleanCompat("edge_glow", RenderTuningDefaults.EDGE_GLOW)
             isPowerSaver = prefs.getBooleanCompat("power_saver", false)
             isDebug = prefs.getBooleanCompat("debug_mode", false)
 
@@ -1892,6 +1899,7 @@ class DiffuseWallpaperService : WallpaperService() {
             // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
             shader.setFloatUniform("scale", ogUserScale + midWarp)
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
+            shader.setFloatUniform("fluidity", ogUserFluidity)
             shader.setFloatUniform("bass", if (isBeatZonesEnabled) bassEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("mids", if (isBeatZonesEnabled) midEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("highs", if (isBeatZonesEnabled) trebleEnergy.coerceIn(0f, 1f) else 0f)
@@ -1981,8 +1989,8 @@ class DiffuseWallpaperService : WallpaperService() {
             val fallbackBiasX = if (isArtworkMotionEnabled) artworkMotionBiasX else 0f
             val fallbackBiasY = if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
             val midZoom = if (isBeatZonesEnabled) midEnergy * 0.025f else 0f
-            val drift = time * 0.06f * fallbackMotionSpeed
-            val zoom = 1.18f + ogBorderEased * 0.10f + midZoom
+            val drift = time * 0.06f * fallbackMotionSpeed * ogUserFluidity
+            val zoom = 1.18f + (ogUserFluidity - 1f) * 0.07f + ogBorderEased * 0.10f + midZoom
             val fw = ogFieldPx.toFloat()
             val fh = ogFieldPx.toFloat()
             ogFieldMatrix.reset()
@@ -2459,7 +2467,8 @@ class DiffuseWallpaperService : WallpaperService() {
             edgeGlowHeight = height
             edgeGlowPaletteHash = paletteHash
             edgeGlowLowPower = lowPower
-            edgeGlowDepth = min(w, h) * if (lowPower) 0.085f else 0.13f
+            // Spread the optional glow out rather than painting bright, obvious edge strips.
+            edgeGlowDepth = min(w, h) * if (lowPower) 0.13f else 0.19f
             val top = applyTuning(targetColors.getOrElse(0) { Color.WHITE })
             val right = applyTuning(targetColors.getOrElse(1) { top })
             val bottom = applyTuning(targetColors.getOrElse(2) { right })
@@ -2479,14 +2488,14 @@ class DiffuseWallpaperService : WallpaperService() {
             val high = if (isBeatZonesEnabled) trebleEnergy else 0f
             val pulse = (bassEnergy * userBeatPulse * 0.35f + high * 0.75f).coerceIn(0f, 1f)
             val alpha = if (isLowPowerGlowMode()) {
-                (16f + pulse * 38f).toInt().coerceIn(10, 54)
+                (9f + pulse * 22f).toInt().coerceIn(8, 32)
             } else {
-                (34f + pulse * 86f).toInt().coerceIn(24, 120)
+                (17f + pulse * 46f).toInt().coerceIn(14, 65)
             }
             edgeGlowTopPaint.alpha = alpha
-            edgeGlowRightPaint.alpha = (alpha * 0.68f).toInt().coerceAtLeast(1)
+            edgeGlowRightPaint.alpha = (alpha * 0.58f).toInt().coerceAtLeast(1)
             edgeGlowBottomPaint.alpha = alpha
-            edgeGlowLeftPaint.alpha = alpha
+            edgeGlowLeftPaint.alpha = (alpha * 0.78f).toInt().coerceAtLeast(1)
             val depth = edgeGlowDepth
             val rightDepth = depth * 1.22f
             canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)

@@ -90,6 +90,7 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var activeBlobCount = BLOB_COUNT
     private var ogPreviewScale = 1.0f
     private var ogPreviewStrength = 1.0f
+    private var ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
 
     init {
         for (i in 0 until BLOB_COUNT) {
@@ -163,11 +164,14 @@ class DiffusePreviewView @JvmOverloads constructor(
     }
 
     private fun updateSettings() {
-        userSpeed = 0.0001f + (prefs.getIntCompat("og_speed", 50).toFloat() / 100f) * 0.08f
+        userSpeed = 0.0001f + (prefs.getIntCompat("og_speed", RenderTuningDefaults.SPEED).toFloat() / 100f) * 0.08f
         userSizeMult = 0.7f + (prefs.getIntCompat("og_scale", 50).toFloat() / 100f)
         userWander = 1.0f
         ogPreviewScale = 0.4f + (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f
         ogPreviewStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f).coerceIn(0f, 2f)
+        ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(
+            prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
+        )
 
         userSat = (prefs.getIntCompat("sat", 50).toFloat() / 50f) * 1.25f
         userBright = (prefs.getIntCompat("bright", 50).toFloat() / 50f) * 1.0f
@@ -536,13 +540,14 @@ class DiffusePreviewView @JvmOverloads constructor(
         val scale = ogPreviewScale.coerceIn(0.4f, 1.6f)
         val strength = (0.38f + ogPreviewStrength * 0.10f).coerceIn(0.35f, 0.60f)
         val baseAlpha = (userBlobAlpha * strength).toInt().coerceIn(60, 158)
-        val p = time * 0.12f
-        drawOgEllipse(canvas, screenW * (0.18f + sin(p) * 0.035f), screenH * (0.06f + cos(p * 0.8f) * 0.020f), screenW * 0.84f * scale, screenH * 0.42f * scale, light, baseAlpha + 18, 0.44f)
-        drawOgEllipse(canvas, screenW * (0.88f + cos(p * 0.9f) * 0.030f), screenH * (0.18f + sin(p * 0.7f) * 0.030f), screenW * 0.72f * scale, screenH * 0.54f * scale, primary, baseAlpha + 8, 0.50f)
-        drawOgEllipse(canvas, screenW * (0.20f + cos(p * 1.2f) * 0.035f), screenH * (0.56f + sin(p * 0.9f) * 0.028f), screenW * 0.86f * scale, screenH * 0.62f * scale, deep, baseAlpha + 34, 0.48f)
-        drawOgEllipse(canvas, screenW * (0.94f + sin(p * 0.7f) * 0.020f), screenH * (0.76f + cos(p * 1.1f) * 0.026f), screenW * 0.78f * scale, screenH * 0.52f * scale, counter, baseAlpha - 6, 0.54f)
-        drawOgEllipse(canvas, screenW * (0.46f + sin(p * 0.6f) * 0.030f), screenH * (1.06f + cos(p * 0.8f) * 0.018f), screenW * 0.96f * scale, screenH * 0.48f * scale, secondCounter, baseAlpha - 10, 0.58f)
-        drawOgEllipse(canvas, screenW * (0.54f + cos(p * 1.4f) * 0.025f), screenH * (0.36f + sin(p * 1.0f) * 0.030f), screenW * 0.58f * scale, screenH * 0.34f * scale, glow, baseAlpha - 18, 0.42f)
+        val flow = ogPreviewFluidity
+        val p = time * (0.12f + (flow - 1f) * 0.04f)
+        drawOgEllipse(canvas, screenW * (0.18f + sin(p) * 0.035f * flow), screenH * (0.06f + cos(p * 0.8f) * 0.020f * flow), screenW * 0.84f * scale, screenH * 0.42f * scale, light, baseAlpha + 18, 0.44f)
+        drawOgEllipse(canvas, screenW * (0.88f + cos(p * 0.9f) * 0.030f * flow), screenH * (0.18f + sin(p * 0.7f) * 0.030f * flow), screenW * 0.72f * scale, screenH * 0.54f * scale, primary, baseAlpha + 8, 0.50f)
+        drawOgEllipse(canvas, screenW * (0.20f + cos(p * 1.2f) * 0.035f * flow), screenH * (0.56f + sin(p * 0.9f) * 0.028f * flow), screenW * 0.86f * scale, screenH * 0.62f * scale, deep, baseAlpha + 34, 0.48f)
+        drawOgEllipse(canvas, screenW * (0.94f + sin(p * 0.7f) * 0.020f * flow), screenH * (0.76f + cos(p * 1.1f) * 0.026f * flow), screenW * 0.78f * scale, screenH * 0.52f * scale, counter, baseAlpha - 6, 0.54f)
+        drawOgEllipse(canvas, screenW * (0.46f + sin(p * 0.6f) * 0.030f * flow), screenH * (1.06f + cos(p * 0.8f) * 0.018f * flow), screenW * 0.96f * scale, screenH * 0.48f * scale, secondCounter, baseAlpha - 10, 0.58f)
+        drawOgEllipse(canvas, screenW * (0.54f + cos(p * 1.4f) * 0.025f * flow), screenH * (0.36f + sin(p * 1.0f) * 0.030f * flow), screenW * 0.58f * scale, screenH * 0.34f * scale, glow, baseAlpha - 18, 0.42f)
     }
 
     private fun drawOgRibbon(

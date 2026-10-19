@@ -82,7 +82,8 @@ class MainActivity : AppCompatActivity() {
 
     private val sliderSettings = listOf(
         SliderSetting(R.id.rowOgScale, "og_scale", "Field scale", "Controls how tightly the album colors fill the screen."),
-        SliderSetting(R.id.rowOgSpeed, "og_speed", "Drift speed", "The center position is the original, relaxed pace.", format = { String.format(Locale.getDefault(), "%.1f×", it / 50f) }),
+        SliderSetting(R.id.rowOgSpeed, "og_speed", "Drift speed", "A relaxed but visibly flowing pace.", defaultValue = RenderTuningDefaults.SPEED, format = { String.format(Locale.getDefault(), "%.1f×", it / 50f) }),
+        SliderSetting(R.id.rowOgFluidity, "og_fluidity", "Fluidity", "Make the blurred colors fold and flow more organically.", defaultValue = RenderTuningDefaults.FLUIDITY),
         SliderSetting(R.id.rowOgTransition, "og_transition", "Track transition", "Time taken to blend into a new album palette.", defaultValue = 16, max = 60, format = { String.format(Locale.getDefault(), "%.1f s", it.coerceAtLeast(1) / 10f) }),
         SliderSetting(R.id.rowBeat, "beat", "Beat pulse", "Sets how strongly low frequencies push the field."),
         SliderSetting(R.id.rowOgStrength, "og_strength", "Pulse strength", "Limits the motion added by each beat."),
@@ -106,7 +107,7 @@ class MainActivity : AppCompatActivity() {
         SwitchSetting(R.id.rowArtMotion, "art_motion", "Artwork motion", "Use each cover's contrast and color balance to subtly shape drift speed and direction.", defaultValue = true),
         SwitchSetting(R.id.rowBeatZones, "beat_zones", "Frequency zones", "Bass controls zoom, mids shape the warp, and highs add grain and edge shimmer.", defaultValue = true),
         SwitchSetting(R.id.rowBatteryIntelligence, "battery_intelligence", "Battery intelligence", "Automatically reduce render load on low battery or Android power saver, then restore it while charging.", defaultValue = true),
-        SwitchSetting(R.id.rowEdgeGlow, "edge_glow", "Edge glow", "Bleed album colors around the display edges and pulse them with the music.", defaultValue = true),
+        SwitchSetting(R.id.rowEdgeGlow, "edge_glow", "Edge glow", "Optional soft color glow at the screen edges.", defaultValue = RenderTuningDefaults.EDGE_GLOW),
         SwitchSetting(R.id.rowPowerSaver, "power_saver", "Power saver", "Limit wallpaper rendering to 30 frames per second."),
         SwitchSetting(R.id.rowForceDark, "force_dark_icons", "Dark system icons", "Use dark launcher icons when supported."),
         SwitchSetting(R.id.rowDebug, "debug_mode", "Show frame rate", "Display renderer frame rate on the wallpaper.")
