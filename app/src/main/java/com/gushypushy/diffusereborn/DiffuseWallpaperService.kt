@@ -82,6 +82,7 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float scale;
             uniform float border;
             uniform float fluidity;
+            uniform float extraCurl;
             uniform float2 artMotion;
             uniform float bass;
             uniform float mids;
@@ -155,6 +156,11 @@ class DiffuseWallpaperService : WallpaperService() {
                 float ribbonY = sin((r.x - q.y * 0.28) * 7.0 + waveTime * 1.05 + 1.1) *
                                 (0.018 + mids * 0.009);
                 r += float2(ribbonX, ribbonY) * fluidity;
+                // Reuse the existing FBM vectors to curl adjacent color bands
+                // in opposite directions. No extra noise octaves or texture reads.
+                // At 0..70% this is exactly zero, keeping the existing look intact.
+                float2 curl = float2(q.y - 0.5, 0.5 - q.x) * (0.22 * extraCurl);
+                r += curl;
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
 
                 // A tiny radial elastic deformation makes bass hits feel physical instead of
@@ -548,6 +554,8 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
         private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
         private var ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
+        private var ogUserFlowSpeed = 1f
+        private var ogUserExtraCurl = 0f
         private var artworkMotionSpeed = 1f
         private var artworkMotionTargetSpeed = 1f
         private var artworkMotionBiasX = 0f
@@ -1027,9 +1035,10 @@ class DiffuseWallpaperService : WallpaperService() {
             // strength: amplitude of the beat-driven u_border zoom.
             ogUserScale = (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f + 0.4f
             ogUserSpeed = (prefs.getIntCompat("og_speed", RenderTuningDefaults.SPEED).toFloat() / 50f)
-            ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(
-                prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
-            )
+            val fluiditySetting = prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
+            ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(fluiditySetting)
+            ogUserFlowSpeed = RenderTuningDefaults.fluidityMotionMultiplier(fluiditySetting)
+            ogUserExtraCurl = RenderTuningDefaults.extraCurl(fluiditySetting)
             ogUserStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f)
 
             // --- Reactivity ---
@@ -1211,7 +1220,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE
                 // Apply the wake burst to actual warp time, not just the slowly eased
                 // target. Otherwise the 1-second acceleration is barely perceptible.
-                ogNoiseClock += dtSec * ogSpeedEased * motionBoost
+                ogNoiseClock += dtSec * ogSpeedEased * motionBoost * ogUserFlowSpeed
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
             }
 
@@ -1971,6 +1980,7 @@ class DiffuseWallpaperService : WallpaperService() {
             shader.setFloatUniform("scale", ogUserScale + midWarp)
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
             shader.setFloatUniform("fluidity", ogUserFluidity)
+            shader.setFloatUniform("extraCurl", ogUserExtraCurl)
             shader.setFloatUniform("bass", if (isBeatZonesEnabled) bassEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("mids", if (isBeatZonesEnabled) midEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("highs", if (isBeatZonesEnabled) trebleEnergy.coerceIn(0f, 1f) else 0f)
@@ -2060,7 +2070,7 @@ class DiffuseWallpaperService : WallpaperService() {
             val fallbackBiasX = if (isArtworkMotionEnabled) artworkMotionBiasX else 0f
             val fallbackBiasY = if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
             val midZoom = if (isBeatZonesEnabled) midEnergy * 0.025f else 0f
-            val drift = time * 0.06f * fallbackMotionSpeed * ogUserFluidity
+            val drift = time * 0.06f * fallbackMotionSpeed * ogUserFluidity * ogUserFlowSpeed
             val zoom = 1.18f + (ogUserFluidity - 1f) * 0.07f + ogBorderEased * 0.10f + midZoom
             val fw = ogFieldPx.toFloat()
             val fh = ogFieldPx.toFloat()

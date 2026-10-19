@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
     private val sliderSettings = listOf(
         SliderSetting(R.id.rowOgScale, "og_scale", "Field scale", "Controls how tightly the album colors fill the screen."),
         SliderSetting(R.id.rowOgSpeed, "og_speed", "Drift speed", "A relaxed but visibly flowing pace.", defaultValue = RenderTuningDefaults.SPEED, format = { String.format(Locale.getDefault(), "%.1f×", it / 50f) }),
-        SliderSetting(R.id.rowOgFluidity, "og_fluidity", "Fluidity", "Make the blurred colors fold and flow more organically.", defaultValue = RenderTuningDefaults.FLUIDITY),
+        SliderSetting(R.id.rowOgFluidity, "og_fluidity", "Fluidity", "Higher settings unleash deeper bends, curling color waves, and faster liquid flow.", defaultValue = RenderTuningDefaults.FLUIDITY),
         SliderSetting(R.id.rowOgTransition, "og_transition", "Track transition", "Time taken to blend into a new album palette.", defaultValue = 16, max = 60, format = { String.format(Locale.getDefault(), "%.1f s", it.coerceAtLeast(1) / 10f) }),
         SliderSetting(R.id.rowBeat, "beat", "Beat pulse", "Sets how strongly low frequencies push the field."),
         SliderSetting(R.id.rowOgStrength, "og_strength", "Pulse strength", "Limits the motion added by each beat."),

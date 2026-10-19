@@ -91,6 +91,7 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var ogPreviewScale = 1.0f
     private var ogPreviewStrength = 1.0f
     private var ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
+    private var ogPreviewFlowSpeed = 1f
 
     init {
         for (i in 0 until BLOB_COUNT) {
@@ -169,9 +170,9 @@ class DiffusePreviewView @JvmOverloads constructor(
         userWander = 1.0f
         ogPreviewScale = 0.4f + (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f
         ogPreviewStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f).coerceIn(0f, 2f)
-        ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(
-            prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
-        )
+        val fluiditySetting = prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
+        ogPreviewFluidity = RenderTuningDefaults.fluidityMultiplier(fluiditySetting)
+        ogPreviewFlowSpeed = RenderTuningDefaults.fluidityMotionMultiplier(fluiditySetting)
 
         userSat = (prefs.getIntCompat("sat", 50).toFloat() / 50f) * 1.25f
         userBright = (prefs.getIntCompat("bright", 50).toFloat() / 50f) * 1.0f
@@ -541,7 +542,8 @@ class DiffusePreviewView @JvmOverloads constructor(
         val strength = (0.38f + ogPreviewStrength * 0.10f).coerceIn(0.35f, 0.60f)
         val baseAlpha = (userBlobAlpha * strength).toInt().coerceIn(60, 158)
         val flow = ogPreviewFluidity
-        val p = time * (0.12f + (flow - 1f) * 0.04f)
+        val flowSpeed = ogPreviewFlowSpeed
+        val p = time * (0.12f + (flow - 1f) * 0.04f) * flowSpeed
         drawOgEllipse(canvas, screenW * (0.18f + sin(p) * 0.035f * flow), screenH * (0.06f + cos(p * 0.8f) * 0.020f * flow), screenW * 0.84f * scale, screenH * 0.42f * scale, light, baseAlpha + 18, 0.44f)
         drawOgEllipse(canvas, screenW * (0.88f + cos(p * 0.9f) * 0.030f * flow), screenH * (0.18f + sin(p * 0.7f) * 0.030f * flow), screenW * 0.72f * scale, screenH * 0.54f * scale, primary, baseAlpha + 8, 0.50f)
         drawOgEllipse(canvas, screenW * (0.20f + cos(p * 1.2f) * 0.035f * flow), screenH * (0.56f + sin(p * 0.9f) * 0.028f * flow), screenW * 0.86f * scale, screenH * 0.62f * scale, deep, baseAlpha + 34, 0.48f)
