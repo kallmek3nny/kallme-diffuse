@@ -148,13 +148,17 @@ class DiffuseWallpaperService : WallpaperService() {
                 // A travelling vortex turns the field through broad, smooth arcs.
                 // This operates on UVs before the existing FBM, without adding any
                 // new noise iterations or field texture fetches. Zero at <=70%.
-                float2 vortexCenter = float2(
-                    0.54 + sin(waveTime * 0.31) * 0.20,
-                    0.76 + cos(waveTime * 0.27) * 0.19
-                );
-                float2 delta = waveUv - vortexCenter;
-                float vortexFalloff = 1.0 / (1.0 + dot(delta, delta) * 3.5);
-                waveUv += float2(-delta.y, delta.x) * (0.42 * vortexStrength * vortexFalloff);
+                // A uniform branch skips the trigonometry entirely at the stock
+                // 0–70% settings, retaining their existing GPU work per pixel.
+                if (vortexStrength > 0.001) {
+                    float2 vortexCenter = float2(
+                        0.54 + sin(waveTime * 0.31) * 0.20,
+                        0.76 + cos(waveTime * 0.27) * 0.19
+                    );
+                    float2 delta = waveUv - vortexCenter;
+                    float vortexFalloff = 1.0 / (1.0 + dot(delta, delta) * 3.5);
+                    waveUv += float2(-delta.y, delta.x) * (0.42 * vortexStrength * vortexFalloff);
+                }
 
                 float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),
                                   fbm(waveUv + float2(timeScaled * 0.1, timeScaled)));
