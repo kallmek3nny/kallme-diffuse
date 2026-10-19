@@ -6,8 +6,9 @@ import org.junit.Test
 
 class ScreenMotionTest {
     @Test fun fadeIntoSleepIsBoundedAndMonotonic() {
+        assertEquals(48, ScreenMotion.AOD_DIM_ALPHA)
         assertEquals(0, ScreenMotion.sleepDimAlpha(-30L))
-        assertEquals(225, ScreenMotion.sleepDimAlpha(880L))
+        assertEquals(48, ScreenMotion.sleepDimAlpha(880L))
         assertTrue(ScreenMotion.sleepDimAlpha(250L) < ScreenMotion.sleepDimAlpha(480L))
         assertTrue(ScreenMotion.sleepDimAlpha(480L) < ScreenMotion.sleepDimAlpha(720L))
     }
@@ -21,7 +22,7 @@ class ScreenMotionTest {
     }
 
     @Test fun wakingQuicklyRestoresWallpaperBrightness() {
-        assertEquals(225, ScreenMotion.wakeDimAlpha(0L))
+        assertEquals(48, ScreenMotion.wakeDimAlpha(0L))
         assertTrue(ScreenMotion.wakeDimAlpha(140L) > ScreenMotion.wakeDimAlpha(280L))
         assertEquals(0, ScreenMotion.wakeDimAlpha(360L))
         assertEquals(0, ScreenMotion.wakeDimAlpha(-1L))

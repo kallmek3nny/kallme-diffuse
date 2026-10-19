@@ -5,6 +5,8 @@ internal object ScreenMotion {
     const val SLEEP_DURATION_MS = 880L
     const val WAKE_DURATION_MS = 1100L
     private const val WAKE_FADE_MS = 360L
+    // Keep album colors legible on compatible AOD surfaces (18.8% black overlay).
+    const val AOD_DIM_ALPHA = 48
 
     private fun ease(value: Float): Float {
         val t = value.coerceIn(0f, 1f)
@@ -12,13 +14,13 @@ internal object ScreenMotion {
     }
 
     fun sleepDimAlpha(ageMs: Long): Int =
-        (225f * ease(ageMs.coerceAtLeast(0L).toFloat() / SLEEP_DURATION_MS)).toInt()
-            .coerceIn(0, 225)
+        (AOD_DIM_ALPHA * ease(ageMs.coerceAtLeast(0L).toFloat() / SLEEP_DURATION_MS)).toInt()
+            .coerceIn(0, AOD_DIM_ALPHA)
 
     fun wakeDimAlpha(ageMs: Long): Int {
         if (ageMs < 0L) return 0
-        return (225f * (1f - ease(ageMs.toFloat() / WAKE_FADE_MS))).toInt()
-            .coerceIn(0, 225)
+        return (AOD_DIM_ALPHA * (1f - ease(ageMs.toFloat() / WAKE_FADE_MS))).toInt()
+            .coerceIn(0, AOD_DIM_ALPHA)
     }
 
     fun wakeMotionMultiplier(ageMs: Long): Float {

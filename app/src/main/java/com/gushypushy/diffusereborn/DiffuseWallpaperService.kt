@@ -626,6 +626,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var lastFrameTimeNs = System.nanoTime()
         private var lastDrawTimeNs = 0L
         private var debugLastTimeNs = System.nanoTime()
+        private var highMotionUntilMs = 0L
 
         override fun onCreate(surfaceHolder: android.view.SurfaceHolder?) {
             super.onCreate(surfaceHolder)
@@ -649,6 +650,11 @@ class DiffuseWallpaperService : WallpaperService() {
                 val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
                 systemPowerSaveMode = powerManager?.isPowerSaveMode == true
                 screenOff = powerManager?.isInteractive == false
+                // An engine first attached to an already-dark display should render
+                // one dimmed frame instead of flashing at full wallpaper brightness.
+                if (screenOff) {
+                    sleepStartMs = SystemClock.uptimeMillis() - ScreenMotion.SLEEP_DURATION_MS
+                }
                 updateSettings()
 
 
@@ -1048,12 +1054,18 @@ class DiffuseWallpaperService : WallpaperService() {
             userPosY = prefs.getIntCompat("pos_y", 50).toFloat() / 100f
 
             // --- Album art centrepiece ---
-            isCenterArtEnabled = prefs.getBooleanCompat("center_art_on", false)
-            centerArtBlur = prefs.getIntCompat("center_blur", 0).toFloat() / 100f
+            val enabledArt = prefs.getBooleanCompat("center_art_on", false)
+            val requestedBlur = prefs.getIntCompat("center_blur", 0).toFloat() / 100f
+            // A speed/FPS/color change must not trigger a 1000px bitmap rebuild.
+            if (enabledArt != isCenterArtEnabled || abs(requestedBlur - centerArtBlur) > 0.0001f) {
+                lastProcessedArt = null
+                centerArtBuildSource = null
+            }
+            isCenterArtEnabled = enabledArt
+            centerArtBlur = requestedBlur
             centerArtOpacity = (prefs.getIntCompat("center_opacity", 100).toFloat() / 100f * 255).toInt()
             centerArtScale = 0.5f + (prefs.getIntCompat("center_size", 50).toFloat() / 50f)
-            lastProcessedArt = null
-            if (!isCenterArtEnabled) {
+            if (!isCenterArtEnabled && centerArtBitmap != null) {
                 centerArtBuildSource = null
                 centerArtBitmap?.let { if (!it.isRecycled) it.recycle() }
                 centerArtBitmap = null
@@ -1103,21 +1115,25 @@ class DiffuseWallpaperService : WallpaperService() {
                     else -> cap
                 }
             }
-            if (screenOff) return min(cap, 30f)
-            if (!isAdaptiveFpsEnabled) return cap
-
-            val activeAudio = MusicListenerService.currentIsPlaying ||
-                    bassEnergy > 0.035f || midEnergy > 0.035f || trebleEnergy > 0.035f
+            val nowMs = SystemClock.uptimeMillis()
             val waking = wakeStartMs >= 0L &&
-                    SystemClock.uptimeMillis() - wakeStartMs < ScreenMotion.WAKE_DURATION_MS
-            val activeVisual = ogFadeProgress < 0.999f || fadeProgress < 0.999f ||
-                    surgeProgress > 0.01f || isTouching || waking
-            val desired = when {
-                activeAudio || activeVisual -> cap
-                MusicListenerService.currentAlbumArt != null -> min(cap, 60f)
-                else -> min(cap, 30f)
+                    nowMs - wakeStartMs < ScreenMotion.WAKE_DURATION_MS
+            val transitionActive = ogFadeProgress < 0.999f || fadeProgress < 0.999f
+            // Keep transient motion responsive without switching between 60/120 on
+            // every audio FFT packet. Hold the high refresh for 700ms after a hit.
+            if (!screenOff && (waking || isTouching || surgeProgress > 0.18f ||
+                            bassEnergy > 0.42f)) {
+                highMotionUntilMs = nowMs + 700L
             }
-            return desired.coerceAtLeast(15f)
+            return RenderFramePolicy.targetFps(
+                cap = cap,
+                adaptive = isAdaptiveFpsEnabled,
+                screenOff = screenOff,
+                playing = MusicListenerService.currentIsPlaying,
+                hasArtwork = MusicListenerService.currentAlbumArt != null,
+                transitioning = transitionActive,
+                highMotion = nowMs < highMotionUntilMs
+            )
         }
 
         private fun updateTargetFrameRate(force: Boolean = false) {
@@ -1230,9 +1246,13 @@ class DiffuseWallpaperService : WallpaperService() {
                     // At 120 Hz wake on every vsync. Delayed callbacks are kept for 30/60 FPS modes.
                     choreographer.postFrameCallback(this)
                 } else {
-                    val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
-                    if (remainingNs >= 1_000_000L) {
-                        choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                    val remainingNs = if (lastDrawTimeNs == 0L) 0L else
+                            frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                    // Request the next callback slightly before the target deadline,
+                    // allowing Choreographer to align to vsync instead of skipping it.
+                    val delayNs = (remainingNs - 6_000_000L).coerceAtLeast(0L)
+                    if (delayNs >= 1_000_000L) {
+                        choreographer.postFrameCallbackDelayed(this, (delayNs / 1_000_000L).coerceAtLeast(1L))
                     } else {
                         choreographer.postFrameCallback(this)
                     }
