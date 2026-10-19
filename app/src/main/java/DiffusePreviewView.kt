@@ -65,7 +65,7 @@ class DiffusePreviewView @JvmOverloads constructor(
     private var screenH = 0f
     private var lastFrameTimeNs = 0L
     private var lastPreviewDrawTimeNs = 0L
-    private val previewFrameIntervalNs = 1_000_000_000L / 30L
+    private val previewFrameIntervalNs = 1_000_000_000L / 60L
     private val slowMotionFactor = 0.25f
     private val hsvCache = FloatArray(3)
 
