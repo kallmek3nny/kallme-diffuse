@@ -29,6 +29,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -241,17 +242,48 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
-        // --- SCREEN RECEIVER ---
+        // --- DISPLAY TRANSITIONS ---
+        // The operating system controls whether a wallpaper remains visible on AOD.
+        // No wake lock or background render loop is held after the short fade.
+        private var screenOff = false
+        private var sleepStartMs = -1L
+        private var wakeStartMs = -1L
+        private val displayFadePaint = Paint().apply { color = Color.BLACK }
+
+        private fun beginSleep() {
+            if (screenOff) return
+            screenOff = true
+            sleepStartMs = SystemClock.uptimeMillis()
+            wakeStartMs = -1L
+            stopVisualizer()
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
+                updateTargetFrameRate(force = true)
+                startDrawing()
+            } else {
+                stopDrawing()
+            }
+        }
+
+        private fun beginWake() {
+            if (!screenOff) return
+            screenOff = false
+            sleepStartMs = -1L
+            wakeStartMs = SystemClock.uptimeMillis()
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
+                updateTargetFrameRate(force = true)
+                trySetupVisualizer()
+                startDrawing()
+            }
+        }
+
         private val screenReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_ON -> {
-                        startDrawing()
+                        beginWake()
                         MusicListenerService.forceCheck()
                     }
-                    Intent.ACTION_SCREEN_OFF -> {
-                        stopDrawing()
-                    }
+                    Intent.ACTION_SCREEN_OFF -> beginSleep()
                 }
             }
         }
@@ -614,7 +646,9 @@ class DiffuseWallpaperService : WallpaperService() {
             try {
                 prefs = getSharedPreferences("diffuse_prefs", Context.MODE_PRIVATE)
                 prefs.registerOnSharedPreferenceChangeListener(this)
-                systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                systemPowerSaveMode = powerManager?.isPowerSaveMode == true
+                screenOff = powerManager?.isInteractive == false
                 updateSettings()
 
 
@@ -1069,12 +1103,15 @@ class DiffuseWallpaperService : WallpaperService() {
                     else -> cap
                 }
             }
+            if (screenOff) return min(cap, 30f)
             if (!isAdaptiveFpsEnabled) return cap
 
             val activeAudio = MusicListenerService.currentIsPlaying ||
                     bassEnergy > 0.035f || midEnergy > 0.035f || trebleEnergy > 0.035f
+            val waking = wakeStartMs >= 0L &&
+                    SystemClock.uptimeMillis() - wakeStartMs < ScreenMotion.WAKE_DURATION_MS
             val activeVisual = ogFadeProgress < 0.999f || fadeProgress < 0.999f ||
-                    surgeProgress > 0.01f || isTouching
+                    surgeProgress > 0.01f || isTouching || waking
             val desired = when {
                 activeAudio || activeVisual -> cap
                 MusicListenerService.currentAlbumArt != null -> min(cap, 60f)
@@ -1151,8 +1188,10 @@ class DiffuseWallpaperService : WallpaperService() {
                 artworkMotionSpeed += (motionSpeedTarget - artworkMotionSpeed) * motionEase
                 artworkMotionBiasX += (motionBiasXTarget - artworkMotionBiasX) * motionEase
                 artworkMotionBiasY += (motionBiasYTarget - artworkMotionBiasY) * motionEase
+                val wakeAgeMs = if (wakeStartMs >= 0L) SystemClock.uptimeMillis() - wakeStartMs else -1L
+                val motionBoost = if (screenOff) 0.22f else ScreenMotion.wakeMotionMultiplier(wakeAgeMs)
                 val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) *
-                        ogUserSpeed * artworkMotionSpeed
+                        ogUserSpeed * artworkMotionSpeed * motionBoost
                 ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE
                 ogNoiseClock += dtSec * ogSpeedEased
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
@@ -1177,7 +1216,14 @@ class DiffuseWallpaperService : WallpaperService() {
                 lastDrawTimeNs = frameTimeNanos
             }
 
-            if (isVisible) {
+            val sleepComplete = screenOff && sleepStartMs >= 0L &&
+                    SystemClock.uptimeMillis() - sleepStartMs >= ScreenMotion.SLEEP_DURATION_MS
+            if (sleepComplete) {
+                stopDrawing()
+                clearSurfaceFrameRateRequest()
+                return
+            }
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
                 if (TARGET_FPS >= 90f) {
                     // At 120 Hz wake on every vsync. Delayed callbacks are kept for 30/60 FPS modes.
                     choreographer.postFrameCallback(this)
@@ -1195,10 +1241,13 @@ class DiffuseWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             if (visible) {
                 MusicListenerService.setHomeState(true)
-                // Re-assert the target when the wallpaper becomes the presented surface again.
+                val interactive = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
+                if (screenOff && interactive) beginWake()
                 updateTargetFrameRate(force = true)
-                trySetupVisualizer()
-                startDrawing()
+                if (!screenOff) trySetupVisualizer()
+                val dimFinished = screenOff && sleepStartMs >= 0L &&
+                        SystemClock.uptimeMillis() - sleepStartMs >= ScreenMotion.SLEEP_DURATION_MS
+                if (!dimFinished) startDrawing()
             } else {
                 MusicListenerService.setHomeState(false)
                 stopVisualizer()
@@ -2828,6 +2877,18 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 if (isDebug) {
                     canvas.drawText("FPS: $fps", 100f, 200f, debugPaint)
+                }
+
+                // Fade the entire composition, including overlays, to a darker AOD state.
+                val nowMs = SystemClock.uptimeMillis()
+                val dimAlpha = if (screenOff && sleepStartMs >= 0L) {
+                    ScreenMotion.sleepDimAlpha(nowMs - sleepStartMs)
+                } else if (wakeStartMs >= 0L) {
+                    ScreenMotion.wakeDimAlpha(nowMs - wakeStartMs)
+                } else 0
+                if (dimAlpha > 0) {
+                    displayFadePaint.alpha = dimAlpha
+                    canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), displayFadePaint)
                 }
 
             } catch (e: Exception) {
