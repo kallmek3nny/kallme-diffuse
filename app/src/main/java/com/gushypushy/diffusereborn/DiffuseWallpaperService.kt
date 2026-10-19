@@ -1267,9 +1267,9 @@ class DiffuseWallpaperService : WallpaperService() {
                 if (screenOff && interactive) beginWake()
                 updateTargetFrameRate(force = true)
                 if (!screenOff) trySetupVisualizer()
-                val dimFinished = screenOff && sleepStartMs >= 0L &&
-                        SystemClock.uptimeMillis() - sleepStartMs >= ScreenMotion.SLEEP_DURATION_MS
-                if (!dimFinished) startDrawing()
+                // An engine that first appears on AOD still needs one static
+                // dimmed frame; doFrame posts it and immediately stops scheduling.
+                startDrawing()
             } else {
                 MusicListenerService.setHomeState(false)
                 stopVisualizer()
