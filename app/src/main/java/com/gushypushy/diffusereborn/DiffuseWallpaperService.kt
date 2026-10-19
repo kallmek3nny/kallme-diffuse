@@ -1191,9 +1191,11 @@ class DiffuseWallpaperService : WallpaperService() {
                 val wakeAgeMs = if (wakeStartMs >= 0L) SystemClock.uptimeMillis() - wakeStartMs else -1L
                 val motionBoost = if (screenOff) 0.22f else ScreenMotion.wakeMotionMultiplier(wakeAgeMs)
                 val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) *
-                        ogUserSpeed * artworkMotionSpeed * motionBoost
+                        ogUserSpeed * artworkMotionSpeed
                 ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE
-                ogNoiseClock += dtSec * ogSpeedEased
+                // Apply the wake burst to actual warp time, not just the slowly eased
+                // target. Otherwise the 1-second acceleration is barely perceptible.
+                ogNoiseClock += dtSec * ogSpeedEased * motionBoost
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
             }
 
