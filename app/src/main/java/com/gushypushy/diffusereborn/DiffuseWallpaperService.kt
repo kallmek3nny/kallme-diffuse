@@ -121,6 +121,24 @@ class DiffuseWallpaperService : WallpaperService() {
                 return v;
             }
 
+            // A reflected, non-tileable album field has a sharp gradient cusp at
+            // every integer coordinate. At high fluidity those cusps look like
+            // straight V-shaped wedges on otherwise smooth gradients.
+            //
+            // Keep the original mirror mapping away from the boundary, but
+            // smoothly flatten its slope near each turning point. This leaves
+            // the fluid waves, palette and field content unchanged and avoids
+            // extra texture fetches or FBM octaves.
+            float2 smoothMirror(float2 coordinate) {
+                float2 mirrored = 1.0 - abs(fract(coordinate * 0.5) * 2.0 - 1.0);
+                const float feather = 0.18;
+                float2 start = min(mirrored, float2(feather));
+                float2 end = min(1.0 - mirrored, float2(feather));
+                float2 smoothStart = start * start * (2.0 * feather - start) / (feather * feather);
+                float2 smoothEnd = end * end * (2.0 * feather - end) / (feather * feather);
+                return clamp(mirrored + (smoothStart - start) + (end - smoothEnd), 0.0, 1.0);
+            }
+
             half4 main(float2 fragCoord) {
                 float2 uv = fragCoord / resolution;
                 if (resolution.x > resolution.y) {
@@ -189,11 +207,12 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 // Sample a nearby version of the same colour field and fold it back into the
                 // primary sample. This creates depth without another expensive noise octave.
-                // Mirror coordinates at the texture boundary instead of hard-clamping them.
-                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.
-                float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);
+                // Use a C1-smooth reflected coordinate. Hard CLAMP created
+                // pinned color bands; ordinary reflection made straight
+                // crease lines at the mirror boundary during strong warps.
+                float2 sampleR = smoothMirror(r);
                 float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
-                float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);
+                float2 depthR = smoothMirror(depthBase);
                 float2 tc = sampleR * fieldRes;
                 float2 depthTc = depthR * fieldRes;
                 float depthMix = 0.10 + mids * 0.09;
@@ -2016,7 +2035,9 @@ class DiffuseWallpaperService : WallpaperService() {
             val cachedShader = if (previous) ogOldFieldShader else ogFieldShader
             if (cachedBitmap === bitmap && cachedShader != null && !bitmap.isRecycled) return cachedShader
 
-            val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            // Native mirror filtering handles bilinear samples at the field's
+            // border without a hard clamp or a discontinuity at the wrap.
+            val shader = BitmapShader(bitmap, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR)
             // RuntimeShader child bitmaps otherwise use point sampling and expose the field's texels.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 shader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
