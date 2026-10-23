@@ -41,6 +41,9 @@ jobs:
       - name: Compile Kotlin
         run: ./gradlew :app:compileDebugKotlin --stacktrace
 
+      - name: Test render tuning defaults
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
