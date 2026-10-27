@@ -121,30 +121,22 @@ class DiffuseWallpaperService : WallpaperService() {
                 return v;
             }
 
-            // The album field is NOT a seamlessly tileable texture.
-            // Reflecting its coordinates (even with softened corners) folds the
-            // image back on itself every tile. Strong 7x warp turns those folds
-            // into obvious straight/V-shaped bands.
+            // EXTREME WARP COORDINATES:
+            // The blurred artwork is not tileable. Earlier CLAMP, MIRROR, and
+            // piecewise soft-clamp mappings produced large flat or triangular
+            // regions at 7x fluidity. Soft-clamp knees (x=0.18/0.82) were
+            // especially visible on nearly monochromatic album artwork.
             //
-            // Instead, leave the center of the field untouched and compress any
-            // overshoot smoothly toward the nearest edge. This is monotonic and
-            // C1-continuous, so there are no mirror boundaries to form seams.
-            // The two rational tails converge to 0/1 without ever pinning
-            // large areas to a hard-clamped constant. No extra field samples.
-            float safeFieldAxis(float x) {
-                const float edge = 0.18;
-                const float edgeSq = edge * edge;
-                if (x < edge) {
-                    return edgeSq / (2.0 * edge - x);
-                }
-                if (x > 1.0 - edge) {
-                    return 1.0 - edgeSq / (x - (1.0 - 2.0 * edge));
-                }
-                return x;
-            }
-
+            // A single analytic radial mapping has no tile boundaries, hard
+            // clamps or piecewise knees. It maps the entire infinite plane
+            // smoothly into an inset disc within the texture. This preserves
+            // the flow while avoiding huge constant-color sampled regions.
+            // At the center its local scale is 1, without any branch divergence.
             float2 safeFieldUv(float2 uv) {
-                return float2(safeFieldAxis(uv.x), safeFieldAxis(uv.y));
+                const float radius = 0.48;
+                float2 centered = uv - float2(0.5, 0.5);
+                return float2(0.5, 0.5) +
+                       centered * (radius * inversesqrt(radius * radius + dot(centered, centered)));
             }
 
             half4 main(float2 fragCoord) {
@@ -215,9 +207,8 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 // Sample a nearby version of the same colour field and fold it back into the
                 // primary sample. This creates depth without another expensive noise octave.
-                // The artwork field cannot repeat cleanly. Keep both samples
-                // on one smoothly bounded copy of the texture; crossing 0/1
-                // no longer creates a new mirrored polygon/crease.
+                // Use the same smooth, bounded mapping for BOTH samples so
+                // the depth blend never crosses a different coordinate boundary.
                 float2 sampleR = safeFieldUv(r);
                 float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
                 float2 depthR = safeFieldUv(depthBase);
