@@ -210,6 +210,10 @@
                     layout="@layout/item_slider" />
 
                 <include
+                    android:id="@+id/rowOgFluidity"
+                    layout="@layout/item_slider" />
+
+                <include
                     android:id="@+id/rowOgTransition"
                     layout="@layout/item_slider" />
             </LinearLayout>

@@ -29,6 +29,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -80,6 +81,9 @@ class DiffuseWallpaperService : WallpaperService() {
             uniform float timeScaled;
             uniform float scale;
             uniform float border;
+            uniform float fluidity;
+            uniform float extraCurl;
+            uniform float vortexStrength;
             uniform float2 artMotion;
             uniform float bass;
             uniform float mids;
@@ -117,6 +121,24 @@ class DiffuseWallpaperService : WallpaperService() {
                 return v;
             }
 
+            // EXTREME WARP COORDINATES:
+            // The blurred artwork is not tileable. Earlier CLAMP, MIRROR, and
+            // piecewise soft-clamp mappings produced large flat or triangular
+            // regions at 7x fluidity. Soft-clamp knees (x=0.18/0.82) were
+            // especially visible on nearly monochromatic album artwork.
+            //
+            // A single analytic radial mapping has no tile boundaries, hard
+            // clamps or piecewise knees. It maps the entire infinite plane
+            // smoothly into an inset disc within the texture. This preserves
+            // the flow while avoiding huge constant-color sampled regions.
+            // At the center its local scale is 1, without any branch divergence.
+            float2 safeFieldUv(float2 uv) {
+                const float radius = 0.48;
+                float2 centered = uv - float2(0.5, 0.5);
+                return float2(0.5, 0.5) +
+                       centered * (radius * inversesqrt(radius * radius + dot(centered, centered)));
+            }
+
             half4 main(float2 fragCoord) {
                 float2 uv = fragCoord / resolution;
                 if (resolution.x > resolution.y) {
@@ -133,11 +155,28 @@ class DiffuseWallpaperService : WallpaperService() {
                 // Broad low-frequency wave warp. FBM supplies the fine organic motion, while these
                 // travelling curves keep dark / low-detail artwork visibly fluid instead of flat.
                 float waveTime = timeScaled * 0.9;
-                float waveX = sin(uv.y * 5.2 + waveTime * 1.45) * 0.050
-                            + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018;
-                float waveY = sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
-                            + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015;
+                // Multiplying the travelling waves (not the texture UVs) yields more
+                // flowing movement without exposing hard, repeated screen-edge bands.
+                float waveX = (sin(uv.y * 5.2 + waveTime * 1.45) * 0.050
+                             + sin(uv.y * 9.6 - waveTime * 0.82 + 1.4) * 0.018) * fluidity;
+                float waveY = (sin(uv.x * 4.4 - waveTime * 1.18 + 0.7) * 0.042
+                             + sin((uv.x + uv.y) * 7.0 + waveTime * 0.72) * 0.015) * fluidity;
                 float2 waveUv = uv + float2(waveX, waveY);
+
+                // A travelling vortex turns the field through broad, smooth arcs.
+                // This operates on UVs before the existing FBM, without adding any
+                // new noise iterations or field texture fetches. Zero at <=70%.
+                // A uniform branch skips the trigonometry entirely at the stock
+                // 0–70% settings, retaining their existing GPU work per pixel.
+                if (vortexStrength > 0.001) {
+                    float2 vortexCenter = float2(
+                        0.54 + sin(waveTime * 0.31) * 0.20,
+                        0.76 + cos(waveTime * 0.27) * 0.19
+                    );
+                    float2 delta = waveUv - vortexCenter;
+                    float vortexFalloff = 1.0 / (1.0 + dot(delta, delta) * 3.5);
+                    waveUv += float2(-delta.y, delta.x) * (0.42 * vortexStrength * vortexFalloff);
+                }
 
                 float2 q = float2(fbm(waveUv + float2(timeScaled * 0.1, cos(timeScaled))),
                                   fbm(waveUv + float2(timeScaled * 0.1, timeScaled)));
@@ -150,7 +189,12 @@ class DiffuseWallpaperService : WallpaperService() {
                                 (0.024 + mids * 0.012);
                 float ribbonY = sin((r.x - q.y * 0.28) * 7.0 + waveTime * 1.05 + 1.1) *
                                 (0.018 + mids * 0.009);
-                r += float2(ribbonX, ribbonY);
+                r += float2(ribbonX, ribbonY) * fluidity;
+                // Reuse the existing FBM vectors to curl adjacent color bands
+                // in opposite directions. No extra noise octaves or texture reads.
+                // At 0..70% this is exactly zero, keeping the existing look intact.
+                float2 curl = float2(q.y - 0.5, 0.5 - q.x) * (0.22 * extraCurl);
+                r += curl;
                 r = (r - float2(0.5, 0.5)) * (scale + border) + float2(0.5, 0.5);
 
                 // A tiny radial elastic deformation makes bass hits feel physical instead of
@@ -163,11 +207,11 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 // Sample a nearby version of the same colour field and fold it back into the
                 // primary sample. This creates depth without another expensive noise octave.
-                // Mirror coordinates at the texture boundary instead of hard-clamping them.
-                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.
-                float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);
+                // Use the same smooth, bounded mapping for BOTH samples so
+                // the depth blend never crosses a different coordinate boundary.
+                float2 sampleR = safeFieldUv(r);
                 float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
-                float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);
+                float2 depthR = safeFieldUv(depthBase);
                 float2 tc = sampleR * fieldRes;
                 float2 depthTc = depthR * fieldRes;
                 float depthMix = 0.10 + mids * 0.09;
@@ -238,17 +282,48 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
-        // --- SCREEN RECEIVER ---
+        // --- DISPLAY TRANSITIONS ---
+        // The operating system controls whether a wallpaper remains visible on AOD.
+        // No wake lock or background render loop is held after the short fade.
+        private var screenOff = false
+        private var sleepStartMs = -1L
+        private var wakeStartMs = -1L
+        private val displayFadePaint = Paint().apply { color = Color.BLACK }
+
+        private fun beginSleep() {
+            if (screenOff) return
+            screenOff = true
+            sleepStartMs = SystemClock.uptimeMillis()
+            wakeStartMs = -1L
+            stopVisualizer()
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
+                updateTargetFrameRate(force = true)
+                startDrawing()
+            } else {
+                stopDrawing()
+            }
+        }
+
+        private fun beginWake() {
+            if (!screenOff) return
+            screenOff = false
+            sleepStartMs = -1L
+            wakeStartMs = SystemClock.uptimeMillis()
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
+                updateTargetFrameRate(force = true)
+                trySetupVisualizer()
+                startDrawing()
+            }
+        }
+
         private val screenReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_ON -> {
-                        startDrawing()
+                        beginWake()
                         MusicListenerService.forceCheck()
                     }
-                    Intent.ACTION_SCREEN_OFF -> {
-                        stopDrawing()
-                    }
+                    Intent.ACTION_SCREEN_OFF -> beginSleep()
                 }
             }
         }
@@ -374,9 +449,9 @@ class DiffuseWallpaperService : WallpaperService() {
         private var screenH = 0
 
         // COLORS & TRANSITION
-        private var drawingColors: MutableList<Int> = MusicListenerService.currentColors.toMutableList()
-        private var oldColors: List<Int> = MusicListenerService.currentColors
-        private var targetColors: List<Int> = MusicListenerService.currentColors
+        private var drawingColors: MutableList<Int> = MusicListenerService.currentVisualFrame.colors.toMutableList()
+        private var oldColors: List<Int> = MusicListenerService.currentVisualFrame.colors
+        private var targetColors: List<Int> = MusicListenerService.currentVisualFrame.colors
         private var fadeProgress = 1.0f
 
         // SMOOTHNESS CONFIG
@@ -512,6 +587,10 @@ class DiffuseWallpaperService : WallpaperService() {
         private var ogUserScale = 1.0f         // u_scale (slider * 1.2 + 0.4)
         private var ogUserSpeed = 1.0f         // multiplier on the timeSpeed target
         private var ogUserStrength = 1.0f      // amplitude of the beat-driven u_border zoom
+        private var ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(RenderTuningDefaults.FLUIDITY)
+        private var ogUserFlowSpeed = 1f
+        private var ogUserExtraCurl = 0f
+        private var ogUserVortex = 0f
         private var artworkMotionSpeed = 1f
         private var artworkMotionTargetSpeed = 1f
         private var artworkMotionBiasX = 0f
@@ -527,6 +606,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private val ogFieldExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
         private val ogFieldHandler = Handler(Looper.getMainLooper())
         private var ogFieldBuilding: Bitmap? = null
+        private var ogFieldTransitionSnapshot: Bitmap? = null
         // Resolution of the soft colour field. The original GL app blurred into a 192px buffer but
         // sampled it with GL_LINEAR on a full-screen quad. Our float field keeps gradient precision,
         // with linear child sampling and dither at the final framebuffer conversion.
@@ -590,6 +670,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private var lastFrameTimeNs = System.nanoTime()
         private var lastDrawTimeNs = 0L
         private var debugLastTimeNs = System.nanoTime()
+        private var highMotionUntilMs = 0L
 
         override fun onCreate(surfaceHolder: android.view.SurfaceHolder?) {
             super.onCreate(surfaceHolder)
@@ -610,7 +691,14 @@ class DiffuseWallpaperService : WallpaperService() {
             try {
                 prefs = getSharedPreferences("diffuse_prefs", Context.MODE_PRIVATE)
                 prefs.registerOnSharedPreferenceChangeListener(this)
-                systemPowerSaveMode = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                systemPowerSaveMode = powerManager?.isPowerSaveMode == true
+                screenOff = powerManager?.isInteractive == false
+                // An engine first attached to an already-dark display should render
+                // one dimmed frame instead of flashing at full wallpaper brightness.
+                if (screenOff) {
+                    sleepStartMs = SystemClock.uptimeMillis() - ScreenMotion.SLEEP_DURATION_MS
+                }
                 updateSettings()
 
 
@@ -661,6 +749,9 @@ class DiffuseWallpaperService : WallpaperService() {
                 ogFieldBuilding = null
                 ogFieldNew?.recycle()
                 ogFieldOld?.recycle()
+                ogFieldTransitionSnapshot?.let {
+                    if (!it.isRecycled && it !== ogFieldOld && it !== ogFieldNew) it.recycle()
+                }
                 ogFieldBlend?.recycle()
                 idleFieldBitmap?.recycle()
                 ogFieldShaderBitmap = null
@@ -982,7 +1073,12 @@ class DiffuseWallpaperService : WallpaperService() {
             // speed:    scales the timeSpeed target; 50 == the original's stock playing rate.
             // strength: amplitude of the beat-driven u_border zoom.
             ogUserScale = (prefs.getIntCompat("og_scale", 50).toFloat() / 100f) * 1.2f + 0.4f
-            ogUserSpeed = (prefs.getIntCompat("og_speed", 50).toFloat() / 50f)
+            ogUserSpeed = (prefs.getIntCompat("og_speed", RenderTuningDefaults.SPEED).toFloat() / 50f)
+            val fluiditySetting = prefs.getIntCompat("og_fluidity", RenderTuningDefaults.FLUIDITY)
+            ogUserFluidity = RenderTuningDefaults.fluidityMultiplier(fluiditySetting)
+            ogUserFlowSpeed = RenderTuningDefaults.fluidityMotionMultiplier(fluiditySetting)
+            ogUserExtraCurl = RenderTuningDefaults.extraCurl(fluiditySetting)
+            ogUserVortex = RenderTuningDefaults.vortexStrength(fluiditySetting)
             ogUserStrength = (prefs.getIntCompat("og_strength", 50).toFloat() / 50f)
 
             // --- Reactivity ---
@@ -1007,12 +1103,18 @@ class DiffuseWallpaperService : WallpaperService() {
             userPosY = prefs.getIntCompat("pos_y", 50).toFloat() / 100f
 
             // --- Album art centrepiece ---
-            isCenterArtEnabled = prefs.getBooleanCompat("center_art_on", false)
-            centerArtBlur = prefs.getIntCompat("center_blur", 0).toFloat() / 100f
+            val enabledArt = prefs.getBooleanCompat("center_art_on", false)
+            val requestedBlur = prefs.getIntCompat("center_blur", 0).toFloat() / 100f
+            // A speed/FPS/color change must not trigger a 1000px bitmap rebuild.
+            if (enabledArt != isCenterArtEnabled || abs(requestedBlur - centerArtBlur) > 0.0001f) {
+                lastProcessedArt = null
+                centerArtBuildSource = null
+            }
+            isCenterArtEnabled = enabledArt
+            centerArtBlur = requestedBlur
             centerArtOpacity = (prefs.getIntCompat("center_opacity", 100).toFloat() / 100f * 255).toInt()
             centerArtScale = 0.5f + (prefs.getIntCompat("center_size", 50).toFloat() / 50f)
-            lastProcessedArt = null
-            if (!isCenterArtEnabled) {
+            if (!isCenterArtEnabled && centerArtBitmap != null) {
                 centerArtBuildSource = null
                 centerArtBitmap?.let { if (!it.isRecycled) it.recycle() }
                 centerArtBitmap = null
@@ -1023,7 +1125,7 @@ class DiffuseWallpaperService : WallpaperService() {
             isArtworkMotionEnabled = prefs.getBooleanCompat("art_motion", true)
             isBeatZonesEnabled = prefs.getBooleanCompat("beat_zones", true)
             isBatteryIntelligenceEnabled = prefs.getBooleanCompat("battery_intelligence", true)
-            isEdgeGlowEnabled = prefs.getBooleanCompat("edge_glow", true)
+            isEdgeGlowEnabled = prefs.getBooleanCompat("edge_glow", RenderTuningDefaults.EDGE_GLOW)
             isPowerSaver = prefs.getBooleanCompat("power_saver", false)
             isDebug = prefs.getBooleanCompat("debug_mode", false)
 
@@ -1062,18 +1164,25 @@ class DiffuseWallpaperService : WallpaperService() {
                     else -> cap
                 }
             }
-            if (!isAdaptiveFpsEnabled) return cap
-
-            val activeAudio = MusicListenerService.currentIsPlaying ||
-                    bassEnergy > 0.035f || midEnergy > 0.035f || trebleEnergy > 0.035f
-            val activeVisual = ogFadeProgress < 0.999f || fadeProgress < 0.999f ||
-                    surgeProgress > 0.01f || isTouching
-            val desired = when {
-                activeAudio || activeVisual -> cap
-                MusicListenerService.currentAlbumArt != null -> min(cap, 60f)
-                else -> min(cap, 30f)
+            val nowMs = SystemClock.uptimeMillis()
+            val waking = wakeStartMs >= 0L &&
+                    nowMs - wakeStartMs < ScreenMotion.WAKE_DURATION_MS
+            val transitionActive = ogFadeProgress < 0.999f || fadeProgress < 0.999f
+            // Keep transient motion responsive without switching between 60/120 on
+            // every audio FFT packet. Hold the high refresh for 700ms after a hit.
+            if (!screenOff && (waking || isTouching || surgeProgress > 0.18f ||
+                            bassEnergy > 0.42f)) {
+                highMotionUntilMs = nowMs + 700L
             }
-            return desired.coerceAtLeast(15f)
+            return RenderFramePolicy.targetFps(
+                cap = cap,
+                adaptive = isAdaptiveFpsEnabled,
+                screenOff = screenOff,
+                playing = MusicListenerService.currentIsPlaying,
+                hasArtwork = MusicListenerService.currentAlbumArt != null,
+                transitioning = transitionActive,
+                highMotion = nowMs < highMotionUntilMs
+            )
         }
 
         private fun updateTargetFrameRate(force: Boolean = false) {
@@ -1144,10 +1253,14 @@ class DiffuseWallpaperService : WallpaperService() {
                 artworkMotionSpeed += (motionSpeedTarget - artworkMotionSpeed) * motionEase
                 artworkMotionBiasX += (motionBiasXTarget - artworkMotionBiasX) * motionEase
                 artworkMotionBiasY += (motionBiasYTarget - artworkMotionBiasY) * motionEase
+                val wakeAgeMs = if (wakeStartMs >= 0L) SystemClock.uptimeMillis() - wakeStartMs else -1L
+                val motionBoost = if (screenOff) 0.22f else ScreenMotion.wakeMotionMultiplier(wakeAgeMs)
                 val playSpeed = (if (MusicListenerService.currentIsPlaying) OG_SPEED_PLAYING else OG_SPEED_PAUSED) *
                         ogUserSpeed * artworkMotionSpeed
                 ogSpeedEased += (playSpeed - ogSpeedEased) * dtSec * OG_SPEED_EASE
-                ogNoiseClock += dtSec * ogSpeedEased
+                // Apply the wake burst to actual warp time, not just the slowly eased
+                // target. Otherwise the 1-second acceleration is barely perceptible.
+                ogNoiseClock += dtSec * ogSpeedEased * motionBoost * ogUserFlowSpeed
                 if (ogNoiseClock > OG_TIME_WRAP) ogNoiseClock -= OG_TIME_WRAP
             }
 
@@ -1170,14 +1283,25 @@ class DiffuseWallpaperService : WallpaperService() {
                 lastDrawTimeNs = frameTimeNanos
             }
 
-            if (isVisible) {
+            val sleepComplete = screenOff && sleepStartMs >= 0L &&
+                    SystemClock.uptimeMillis() - sleepStartMs >= ScreenMotion.SLEEP_DURATION_MS
+            if (sleepComplete) {
+                stopDrawing()
+                clearSurfaceFrameRateRequest()
+                return
+            }
+            if (isVisible && surfaceHolder.surface?.isValid == true) {
                 if (TARGET_FPS >= 90f) {
                     // At 120 Hz wake on every vsync. Delayed callbacks are kept for 30/60 FPS modes.
                     choreographer.postFrameCallback(this)
                 } else {
-                    val remainingNs = if (lastDrawTimeNs == 0L) 0L else frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
-                    if (remainingNs >= 1_000_000L) {
-                        choreographer.postFrameCallbackDelayed(this, (remainingNs / 1_000_000L).coerceAtLeast(1L))
+                    val remainingNs = if (lastDrawTimeNs == 0L) 0L else
+                            frameIntervalNs - (System.nanoTime() - lastDrawTimeNs)
+                    // Request the next callback slightly before the target deadline,
+                    // allowing Choreographer to align to vsync instead of skipping it.
+                    val delayNs = (remainingNs - 6_000_000L).coerceAtLeast(0L)
+                    if (delayNs >= 1_000_000L) {
+                        choreographer.postFrameCallbackDelayed(this, (delayNs / 1_000_000L).coerceAtLeast(1L))
                     } else {
                         choreographer.postFrameCallback(this)
                     }
@@ -1188,9 +1312,12 @@ class DiffuseWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             if (visible) {
                 MusicListenerService.setHomeState(true)
-                // Re-assert the target when the wallpaper becomes the presented surface again.
+                val interactive = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive == true
+                if (screenOff && interactive) beginWake()
                 updateTargetFrameRate(force = true)
-                trySetupVisualizer()
+                if (!screenOff) trySetupVisualizer()
+                // An engine that first appears on AOD still needs one static
+                // dimmed frame; doFrame posts it and immediately stops scheduling.
                 startDrawing()
             } else {
                 MusicListenerService.setHomeState(false)
@@ -1706,6 +1833,32 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
+        /**
+         * On a second skip, the frame currently visible is already a mix of two
+         * artwork fields. Use that composite as the next transition's starting
+         * point, rather than jumping back to the last target image.
+         *
+         * This runs only when a new cover finishes processing, not per-frame.
+         * Both inputs are small cached RGBA_F16 blurred fields.
+         */
+        private fun captureCurrentFieldForSkip(): Bitmap? {
+            val current = ogFieldNew?.takeUnless { it.isRecycled } ?: return null
+            val previous = ogFieldOld?.takeUnless { it.isRecycled }
+            if (previous == null || ogFadeProgress >= 0.999f) return current
+            val snapshot = runCatching {
+                val bitmap = Bitmap.createBitmap(ogFieldPx, ogFieldPx, Bitmap.Config.RGBA_F16)
+                val canvas = Canvas(bitmap)
+                val rect = RectF(0f, 0f, ogFieldPx.toFloat(), ogFieldPx.toFloat())
+                canvas.drawBitmap(previous, null, rect, null)
+                val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                    alpha = (SongTransition.ease(ogFadeProgress) * 255f).toInt().coerceIn(0, 255)
+                }
+                canvas.drawBitmap(current, null, rect, paint)
+                bitmap
+            }.getOrNull()
+            return snapshot ?: current
+        }
+
         private fun ensureOgFields(art: Bitmap?) {
             if (art == null || art.isRecycled) return
             if (ogFieldSource === art && ogFieldNew != null && !ogFieldNew!!.isRecycled) return
@@ -1720,19 +1873,32 @@ class DiffuseWallpaperService : WallpaperService() {
                 val motionProfile = analyzeArtworkMotion(art)
                 val next = buildOgField(art)
                 ogFieldHandler.post {
-                    ogFieldBuilding = null
+                    if (ogFieldBuilding === art) ogFieldBuilding = null
+                    if (next == null) return@post
+                    // A stale background build must NEVER move the artwork
+                    // backward if the listener has already advanced to a new song.
+                    if (art.isRecycled || MusicListenerService.currentVisualFrame.artwork !== art) {
+                        next.recycle()
+                        return@post
+                    }
                     artworkMotionTargetSpeed = motionProfile.speed
                     artworkMotionTargetBiasX = motionProfile.biasX
                     artworkMotionTargetBiasY = motionProfile.biasY
-                    if (next == null) return@post
-                    if (art.isRecycled) { next.recycle(); return@post }
-                    ogFieldOld?.let { if (it !== ogFieldNew && !it.isRecycled) it.recycle() }
-                    ogFieldOld = ogFieldNew
+
+                    val current = ogFieldNew
+                    val prior = ogFieldOld
+                    val snapshot = captureCurrentFieldForSkip()
+                    if (prior != null && prior !== snapshot && prior !== current && !prior.isRecycled) {
+                        prior.recycle()
+                    }
+                    if (current != null && current !== snapshot && !current.isRecycled) {
+                        current.recycle()
+                    }
+                    ogFieldTransitionSnapshot = if (snapshot !== current) snapshot else null
+                    ogFieldOld = snapshot
                     ogFieldNew = next
                     ogFieldSource = art
-                    // Start a fresh field fade. If there was no previous field (first art of the
-                    // session) skip straight to 1.0 so we don't fade in from an empty buffer.
-                    ogFadeProgress = if (ogFieldOld == null) 1f else 0f
+                    ogFadeProgress = if (snapshot == null) 1f else 0f
                 }
             }
         }
@@ -1744,7 +1910,7 @@ class DiffuseWallpaperService : WallpaperService() {
          * with an animated drift matrix, which still reads far closer to the original than blobs.
          */
         private fun drawOgDiffuseReal(canvas: Canvas, w: Float, h: Float) {
-            ensureOgFields(MusicListenerService.currentAlbumArt)
+            ensureOgFields(MusicListenerService.currentVisualFrame.artwork)
             val albumField = ogFieldNew?.takeUnless { it.isRecycled }
             val isIdleField = albumField == null
             val newField = albumField ?: ensureIdleField()
@@ -1761,7 +1927,7 @@ class DiffuseWallpaperService : WallpaperService() {
             // bitmap any more: that required a software Canvas, and a software Canvas cannot draw a
             // RuntimeShader, so every fade threw and the frame fell back to the flat background
             // colour for the whole ogFadeSeconds window.
-            val fieldFade = if (isIdleField) 1f else ogFadeProgress
+            val fieldFade = if (isIdleField) 1f else SongTransition.ease(ogFadeProgress)
             val transitioning = !isIdleField && fieldFade < 0.999f && ogFieldOld != null && !ogFieldOld!!.isRecycled
             val prevField = if (transitioning) ogFieldOld else null
 
@@ -1892,6 +2058,9 @@ class DiffuseWallpaperService : WallpaperService() {
             // u_scale in the original is (slider*1.2 + 0.4); centred slider ≈ 1.0.
             shader.setFloatUniform("scale", ogUserScale + midWarp)
             shader.setFloatUniform("border", ogBorderEased * 0.35f)
+            shader.setFloatUniform("fluidity", ogUserFluidity)
+            shader.setFloatUniform("extraCurl", ogUserExtraCurl)
+            shader.setFloatUniform("vortexStrength", ogUserVortex)
             shader.setFloatUniform("bass", if (isBeatZonesEnabled) bassEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("mids", if (isBeatZonesEnabled) midEnergy.coerceIn(0f, 1f) else 0f)
             shader.setFloatUniform("highs", if (isBeatZonesEnabled) trebleEnergy.coerceIn(0f, 1f) else 0f)
@@ -1908,6 +2077,8 @@ class DiffuseWallpaperService : WallpaperService() {
             val cachedShader = if (previous) ogOldFieldShader else ogFieldShader
             if (cachedBitmap === bitmap && cachedShader != null && !bitmap.isRecycled) return cachedShader
 
+            // AGSL bounds all UVs smoothly to (0,1). CLAMP is now a safety
+            // net, not a visible compositing operation at texture boundaries.
             val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
             // RuntimeShader child bitmaps otherwise use point sampling and expose the field's texels.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -1981,8 +2152,8 @@ class DiffuseWallpaperService : WallpaperService() {
             val fallbackBiasX = if (isArtworkMotionEnabled) artworkMotionBiasX else 0f
             val fallbackBiasY = if (isArtworkMotionEnabled) artworkMotionBiasY else 0f
             val midZoom = if (isBeatZonesEnabled) midEnergy * 0.025f else 0f
-            val drift = time * 0.06f * fallbackMotionSpeed
-            val zoom = 1.18f + ogBorderEased * 0.10f + midZoom
+            val drift = time * 0.06f * fallbackMotionSpeed * ogUserFluidity * ogUserFlowSpeed
+            val zoom = 1.18f + (ogUserFluidity - 1f) * 0.07f + ogBorderEased * 0.10f + midZoom
             val fw = ogFieldPx.toFloat()
             val fh = ogFieldPx.toFloat()
             ogFieldMatrix.reset()
@@ -2459,7 +2630,8 @@ class DiffuseWallpaperService : WallpaperService() {
             edgeGlowHeight = height
             edgeGlowPaletteHash = paletteHash
             edgeGlowLowPower = lowPower
-            edgeGlowDepth = min(w, h) * if (lowPower) 0.085f else 0.13f
+            // Spread the optional glow out rather than painting bright, obvious edge strips.
+            edgeGlowDepth = min(w, h) * if (lowPower) 0.13f else 0.19f
             val top = applyTuning(targetColors.getOrElse(0) { Color.WHITE })
             val right = applyTuning(targetColors.getOrElse(1) { top })
             val bottom = applyTuning(targetColors.getOrElse(2) { right })
@@ -2479,14 +2651,14 @@ class DiffuseWallpaperService : WallpaperService() {
             val high = if (isBeatZonesEnabled) trebleEnergy else 0f
             val pulse = (bassEnergy * userBeatPulse * 0.35f + high * 0.75f).coerceIn(0f, 1f)
             val alpha = if (isLowPowerGlowMode()) {
-                (16f + pulse * 38f).toInt().coerceIn(10, 54)
+                (9f + pulse * 22f).toInt().coerceIn(8, 32)
             } else {
-                (34f + pulse * 86f).toInt().coerceIn(24, 120)
+                (17f + pulse * 46f).toInt().coerceIn(14, 65)
             }
             edgeGlowTopPaint.alpha = alpha
-            edgeGlowRightPaint.alpha = (alpha * 0.68f).toInt().coerceAtLeast(1)
+            edgeGlowRightPaint.alpha = (alpha * 0.58f).toInt().coerceAtLeast(1)
             edgeGlowBottomPaint.alpha = alpha
-            edgeGlowLeftPaint.alpha = alpha
+            edgeGlowLeftPaint.alpha = (alpha * 0.78f).toInt().coerceAtLeast(1)
             val depth = edgeGlowDepth
             val rightDepth = depth * 1.22f
             canvas.drawRect(0f, 0f, w, depth, edgeGlowTopPaint)
@@ -2689,20 +2861,32 @@ class DiffuseWallpaperService : WallpaperService() {
                 }
 
                 // --- COLOR TRANSITION ---
-                val newColorsFromListener = MusicListenerService.currentColors
+                // The palette becomes eligible only when its blurred cover is
+                // actually ready. Previously the palette moved first, then the
+                // artwork arrived asynchronously and triggered a second jump.
+                val visualState = MusicListenerService.currentVisualFrame
+                val paletteReady = visualState.artwork == null ||
+                        ogFieldSource === visualState.artwork
+                val newColorsFromListener = if (paletteReady) visualState.colors else targetColors
                 if (newColorsFromListener != targetColors) {
-                    oldColors = drawingColors.toList() // Snapshot exactly what we see
+                    oldColors = drawingColors.toList() // Current displayed colors, not stale target.
                     targetColors = newColorsFromListener
-                    fadeProgress = 0.0f
+                    fadeProgress = 0f
                 }
-                if (fadeProgress < 1.0f) {
-                    fadeProgress += (ogLastDtSec / ogFadeSeconds).coerceAtLeast(0f)
-                    if (fadeProgress > 1.0f) fadeProgress = 1.0f
+                if (fadeProgress < 1f) {
+                    fadeProgress = (fadeProgress + ogLastDtSec / ogFadeSeconds).coerceAtMost(1f)
                 }
 
-                // Quintic ease-out
-                val invT = 1.0f - fadeProgress
-                val visualProgress = 1.0f - (invT * invT * invT * invT * invT)
+                val visualProgress = SongTransition.ease(fadeProgress)
+                // The OG rendering path previously never wrote drawingColors.
+                // On rapid skips, transitions therefore restarted at startup colors.
+                val count = maxOf(oldColors.size, targetColors.size)
+                while (drawingColors.size < count) drawingColors.add(Color.GRAY)
+                for (i in 0 until count) {
+                    val from = oldColors.getOrElse(i) { oldColors.lastOrNull() ?: Color.GRAY }
+                    val to = targetColors.getOrElse(i) { targetColors.lastOrNull() ?: Color.GRAY }
+                    drawingColors[i] = SongTransition.blendArgb(from, to, visualProgress)
+                }
 
                 val w = canvas.width.toFloat()
                 val h = canvas.height.toFloat()
@@ -2819,6 +3003,18 @@ class DiffuseWallpaperService : WallpaperService() {
 
                 if (isDebug) {
                     canvas.drawText("FPS: $fps", 100f, 200f, debugPaint)
+                }
+
+                // Fade the entire composition, including overlays, to a darker AOD state.
+                val nowMs = SystemClock.uptimeMillis()
+                val dimAlpha = if (screenOff && sleepStartMs >= 0L) {
+                    ScreenMotion.sleepDimAlpha(nowMs - sleepStartMs)
+                } else if (wakeStartMs >= 0L) {
+                    ScreenMotion.wakeDimAlpha(nowMs - wakeStartMs)
+                } else 0
+                if (dimAlpha > 0) {
+                    displayFadePaint.alpha = dimAlpha
+                    canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), displayFadePaint)
                 }
 
             } catch (e: Exception) {
