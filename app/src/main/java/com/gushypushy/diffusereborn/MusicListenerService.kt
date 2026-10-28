@@ -22,6 +22,10 @@ import kotlin.math.hypot
 
 class MusicListenerService : NotificationListenerService() {
 
+    // Published atomically so the wallpaper never sees colors from track B
+    // paired with a still-processing image from track A.
+    data class VisualFrame(val artwork: Bitmap?, val colors: List<Int>)
+
     companion object {
         const val ACTION_SURGE = "com.gushypushy.diffusereborn.ACTION_SURGE"
         const val ACTION_METADATA_CHANGED = "com.gushypushy.diffusereborn.ACTION_METADATA_CHANGED"
@@ -48,6 +52,9 @@ class MusicListenerService : NotificationListenerService() {
 
         @Volatile
         var currentAlbumArt: Bitmap? = null
+
+        @Volatile
+        var currentVisualFrame: VisualFrame = VisualFrame(null, currentColors)
 
         @Volatile private var isHomeVisible = false
         private var instance: MusicListenerService? = null
@@ -383,16 +390,18 @@ class MusicListenerService : NotificationListenerService() {
                 generatedArt = artBitmap
 
                 // The expensive pixel comparison now happens at most once per track/art identity.
+                // Skip decoding identical artwork, but never publish outdated
+                // requests after a rapid A -> B -> C sequence.
                 val existing = currentAlbumArt
                 if (existing != null && !existing.isRecycled && existing.sameAs(artBitmap)) {
-                    lastArtworkKey = artworkKey
+                    synchronized(this) {
+                        if (pendingArtworkKey == artworkKey &&
+                            artworkIdentity(original) == artworkKey) {
+                            lastArtworkKey = artworkKey
+                        }
+                    }
                     return@execute
                 }
-
-                currentAlbumArt = artBitmap
-                published = true
-                lastArtworkKey = artworkKey
-                notifyMetadataChangedIfNeeded()
 
                 colorBitmap = Bitmap.createScaledBitmap(artBitmap, 100, 100, false)
                 // Already on a serial worker, so synchronous Palette generation avoids overlapping jobs.
@@ -418,10 +427,24 @@ class MusicListenerService : NotificationListenerService() {
 
                 val distinctColors = finalColors.distinct().toMutableList()
                 while (distinctColors.size < 5) distinctColors.add(distinctColors[0])
-                if (currentColors != distinctColors) {
-                    currentColors = distinctColors
-                    notifyMetadataChangedIfNeeded()
+
+                // Publish cover + palette together. The older code published the
+                // cover immediately and its colors only after extraction completed,
+                // producing two visible jumps on every song skip.
+                val latest = synchronized(this) {
+                    if (pendingArtworkKey != artworkKey ||
+                        artworkIdentity(original) != artworkKey) {
+                        false
+                    } else {
+                        currentAlbumArt = artBitmap
+                        currentColors = distinctColors
+                        currentVisualFrame = VisualFrame(artBitmap, distinctColors.toList())
+                        lastArtworkKey = artworkKey
+                        published = true
+                        true
+                    }
                 }
+                if (latest) notifyMetadataChangedIfNeeded()
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {

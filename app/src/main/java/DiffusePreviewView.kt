@@ -709,6 +709,7 @@ class DiffusePreviewView @JvmOverloads constructor(
 
         val newColors = MusicListenerService.currentColors
         if (newColors != targetColors) {
+            // Snapshot the palette actually visible now for interruption-safe skips.
             oldColors = drawingColors.toList()
             targetColors = newColors
             fadeProgress = 0f
@@ -718,9 +719,15 @@ class DiffusePreviewView @JvmOverloads constructor(
             if (fadeProgress > 1.0f) fadeProgress = 1.0f
         }
 
-        // Quintic Ease-Out
-        val invT = 1.0f - fadeProgress
-        val visualProgress = 1.0f - (invT * invT * invT * invT * invT)
+        val visualProgress = SongTransition.ease(fadeProgress)
+        // Keep preview interruptions continuous just like the live wallpaper.
+        val count = maxOf(oldColors.size, targetColors.size)
+        while (drawingColors.size < count) drawingColors.add(Color.GRAY)
+        for (i in 0 until count) {
+            val old = oldColors.getOrElse(i) { oldColors.lastOrNull() ?: Color.GRAY }
+            val new = targetColors.getOrElse(i) { targetColors.lastOrNull() ?: Color.GRAY }
+            drawingColors[i] = SongTransition.blendArgb(old, new, visualProgress)
+        }
 
         if (isOgDiffuseMode) {
             drawOgPreview(canvas, visualProgress)

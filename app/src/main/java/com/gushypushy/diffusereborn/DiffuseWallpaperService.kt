@@ -449,9 +449,9 @@ class DiffuseWallpaperService : WallpaperService() {
         private var screenH = 0
 
         // COLORS & TRANSITION
-        private var drawingColors: MutableList<Int> = MusicListenerService.currentColors.toMutableList()
-        private var oldColors: List<Int> = MusicListenerService.currentColors
-        private var targetColors: List<Int> = MusicListenerService.currentColors
+        private var drawingColors: MutableList<Int> = MusicListenerService.currentVisualFrame.colors.toMutableList()
+        private var oldColors: List<Int> = MusicListenerService.currentVisualFrame.colors
+        private var targetColors: List<Int> = MusicListenerService.currentVisualFrame.colors
         private var fadeProgress = 1.0f
 
         // SMOOTHNESS CONFIG
@@ -606,6 +606,7 @@ class DiffuseWallpaperService : WallpaperService() {
         private val ogFieldExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
         private val ogFieldHandler = Handler(Looper.getMainLooper())
         private var ogFieldBuilding: Bitmap? = null
+        private var ogFieldTransitionSnapshot: Bitmap? = null
         // Resolution of the soft colour field. The original GL app blurred into a 192px buffer but
         // sampled it with GL_LINEAR on a full-screen quad. Our float field keeps gradient precision,
         // with linear child sampling and dither at the final framebuffer conversion.
@@ -748,6 +749,9 @@ class DiffuseWallpaperService : WallpaperService() {
                 ogFieldBuilding = null
                 ogFieldNew?.recycle()
                 ogFieldOld?.recycle()
+                ogFieldTransitionSnapshot?.let {
+                    if (!it.isRecycled && it !== ogFieldOld && it !== ogFieldNew) it.recycle()
+                }
                 ogFieldBlend?.recycle()
                 idleFieldBitmap?.recycle()
                 ogFieldShaderBitmap = null
@@ -1829,6 +1833,32 @@ class DiffuseWallpaperService : WallpaperService() {
             }
         }
 
+        /**
+         * On a second skip, the frame currently visible is already a mix of two
+         * artwork fields. Use that composite as the next transition's starting
+         * point, rather than jumping back to the last target image.
+         *
+         * This runs only when a new cover finishes processing, not per-frame.
+         * Both inputs are small cached RGBA_F16 blurred fields.
+         */
+        private fun captureCurrentFieldForSkip(): Bitmap? {
+            val current = ogFieldNew?.takeUnless { it.isRecycled } ?: return null
+            val previous = ogFieldOld?.takeUnless { it.isRecycled }
+            if (previous == null || ogFadeProgress >= 0.999f) return current
+            val snapshot = runCatching {
+                val bitmap = Bitmap.createBitmap(ogFieldPx, ogFieldPx, Bitmap.Config.RGBA_F16)
+                val canvas = Canvas(bitmap)
+                val rect = RectF(0f, 0f, ogFieldPx.toFloat(), ogFieldPx.toFloat())
+                canvas.drawBitmap(previous, null, rect, null)
+                val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                    alpha = (SongTransition.ease(ogFadeProgress) * 255f).toInt().coerceIn(0, 255)
+                }
+                canvas.drawBitmap(current, null, rect, paint)
+                bitmap
+            }.getOrNull()
+            return snapshot ?: current
+        }
+
         private fun ensureOgFields(art: Bitmap?) {
             if (art == null || art.isRecycled) return
             if (ogFieldSource === art && ogFieldNew != null && !ogFieldNew!!.isRecycled) return
@@ -1843,19 +1873,32 @@ class DiffuseWallpaperService : WallpaperService() {
                 val motionProfile = analyzeArtworkMotion(art)
                 val next = buildOgField(art)
                 ogFieldHandler.post {
-                    ogFieldBuilding = null
+                    if (ogFieldBuilding === art) ogFieldBuilding = null
+                    if (next == null) return@post
+                    // A stale background build must NEVER move the artwork
+                    // backward if the listener has already advanced to a new song.
+                    if (art.isRecycled || MusicListenerService.currentVisualFrame.artwork !== art) {
+                        next.recycle()
+                        return@post
+                    }
                     artworkMotionTargetSpeed = motionProfile.speed
                     artworkMotionTargetBiasX = motionProfile.biasX
                     artworkMotionTargetBiasY = motionProfile.biasY
-                    if (next == null) return@post
-                    if (art.isRecycled) { next.recycle(); return@post }
-                    ogFieldOld?.let { if (it !== ogFieldNew && !it.isRecycled) it.recycle() }
-                    ogFieldOld = ogFieldNew
+
+                    val current = ogFieldNew
+                    val prior = ogFieldOld
+                    val snapshot = captureCurrentFieldForSkip()
+                    if (prior != null && prior !== snapshot && prior !== current && !prior.isRecycled) {
+                        prior.recycle()
+                    }
+                    if (current != null && current !== snapshot && !current.isRecycled) {
+                        current.recycle()
+                    }
+                    ogFieldTransitionSnapshot = if (snapshot !== current) snapshot else null
+                    ogFieldOld = snapshot
                     ogFieldNew = next
                     ogFieldSource = art
-                    // Start a fresh field fade. If there was no previous field (first art of the
-                    // session) skip straight to 1.0 so we don't fade in from an empty buffer.
-                    ogFadeProgress = if (ogFieldOld == null) 1f else 0f
+                    ogFadeProgress = if (snapshot == null) 1f else 0f
                 }
             }
         }
@@ -1867,7 +1910,7 @@ class DiffuseWallpaperService : WallpaperService() {
          * with an animated drift matrix, which still reads far closer to the original than blobs.
          */
         private fun drawOgDiffuseReal(canvas: Canvas, w: Float, h: Float) {
-            ensureOgFields(MusicListenerService.currentAlbumArt)
+            ensureOgFields(MusicListenerService.currentVisualFrame.artwork)
             val albumField = ogFieldNew?.takeUnless { it.isRecycled }
             val isIdleField = albumField == null
             val newField = albumField ?: ensureIdleField()
@@ -1884,7 +1927,7 @@ class DiffuseWallpaperService : WallpaperService() {
             // bitmap any more: that required a software Canvas, and a software Canvas cannot draw a
             // RuntimeShader, so every fade threw and the frame fell back to the flat background
             // colour for the whole ogFadeSeconds window.
-            val fieldFade = if (isIdleField) 1f else ogFadeProgress
+            val fieldFade = if (isIdleField) 1f else SongTransition.ease(ogFadeProgress)
             val transitioning = !isIdleField && fieldFade < 0.999f && ogFieldOld != null && !ogFieldOld!!.isRecycled
             val prevField = if (transitioning) ogFieldOld else null
 
@@ -2818,20 +2861,32 @@ class DiffuseWallpaperService : WallpaperService() {
                 }
 
                 // --- COLOR TRANSITION ---
-                val newColorsFromListener = MusicListenerService.currentColors
+                // The palette becomes eligible only when its blurred cover is
+                // actually ready. Previously the palette moved first, then the
+                // artwork arrived asynchronously and triggered a second jump.
+                val visualState = MusicListenerService.currentVisualFrame
+                val paletteReady = visualState.artwork == null ||
+                        ogFieldSource === visualState.artwork
+                val newColorsFromListener = if (paletteReady) visualState.colors else targetColors
                 if (newColorsFromListener != targetColors) {
-                    oldColors = drawingColors.toList() // Snapshot exactly what we see
+                    oldColors = drawingColors.toList() // Current displayed colors, not stale target.
                     targetColors = newColorsFromListener
-                    fadeProgress = 0.0f
+                    fadeProgress = 0f
                 }
-                if (fadeProgress < 1.0f) {
-                    fadeProgress += (ogLastDtSec / ogFadeSeconds).coerceAtLeast(0f)
-                    if (fadeProgress > 1.0f) fadeProgress = 1.0f
+                if (fadeProgress < 1f) {
+                    fadeProgress = (fadeProgress + ogLastDtSec / ogFadeSeconds).coerceAtMost(1f)
                 }
 
-                // Quintic ease-out
-                val invT = 1.0f - fadeProgress
-                val visualProgress = 1.0f - (invT * invT * invT * invT * invT)
+                val visualProgress = SongTransition.ease(fadeProgress)
+                // The OG rendering path previously never wrote drawingColors.
+                // On rapid skips, transitions therefore restarted at startup colors.
+                val count = maxOf(oldColors.size, targetColors.size)
+                while (drawingColors.size < count) drawingColors.add(Color.GRAY)
+                for (i in 0 until count) {
+                    val from = oldColors.getOrElse(i) { oldColors.lastOrNull() ?: Color.GRAY }
+                    val to = targetColors.getOrElse(i) { targetColors.lastOrNull() ?: Color.GRAY }
+                    drawingColors[i] = SongTransition.blendArgb(from, to, visualProgress)
+                }
 
                 val w = canvas.width.toFloat()
                 val h = canvas.height.toFloat()
