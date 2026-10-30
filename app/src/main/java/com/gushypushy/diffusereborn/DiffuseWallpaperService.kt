@@ -161,15 +161,22 @@ class DiffuseWallpaperService : WallpaperService() {
                 centered *= 1.0 + bass * (0.018 + 0.022 * elasticWave);
                 r = centered + float2(0.5, 0.5);
 
-                // Sample a nearby version of the same colour field and fold it back into the
-                // primary sample. This creates depth without another expensive noise octave.
-                // Mirror coordinates at the texture boundary instead of hard-clamping them.
-                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.
+                // Hard clamps pin warped pixels to one edge texel and draw straight bands.
+                // A triangle-wave mirror avoids the clamp, but has a sharp slope reversal
+                // at each fold. Those C0-only creases turn into visible S-shaped contour
+                // lines once the warp stretches a low-contrast colour field.
+                // Cubic Hermite easing makes the mirror C1 at every reversal without
+                // changing its 2-unit repeat, full range, or the fluid motion.
                 float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);
+                sampleR = sampleR * sampleR * (3.0 - 2.0 * sampleR);
                 float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
                 float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);
-                float2 tc = sampleR * fieldRes;
-                float2 depthTc = depthR * fieldRes;
+                depthR = depthR * depthR * (3.0 - 2.0 * depthR);
+
+                // Stay on source texel centres; evaluating exactly at 0 or fieldRes
+                // otherwise activates the child shader's clamp at the fold boundary.
+                float2 tc = 0.5 + sampleR * (fieldRes - 1.0);
+                float2 depthTc = 0.5 + depthR * (fieldRes - 1.0);
                 float depthMix = 0.10 + mids * 0.09;
                 half4 col = field.eval(tc);
                 half4 depthCol = field.eval(depthTc);
