@@ -161,15 +161,22 @@ class DiffuseWallpaperService : WallpaperService() {
                 centered *= 1.0 + bass * (0.018 + 0.022 * elasticWave);
                 r = centered + float2(0.5, 0.5);
 
-                // Sample a nearby version of the same colour field and fold it back into the
-                // primary sample. This creates depth without another expensive noise octave.
-                // Mirror coordinates at the texture boundary instead of hard-clamping them.
-                // Hard clamps can pin a large warped region to x=1.0 and show up as a vertical edge band.
+                // Hard clamps pin warped pixels to one edge texel and draw straight bands.
+                // A triangle-wave mirror avoids the clamp, but has a sharp slope reversal
+                // at each fold. Those C0-only creases turn into visible S-shaped contour
+                // lines once the warp stretches a low-contrast colour field.
+                // Cubic Hermite easing makes the mirror C1 at every reversal without
+                // changing its 2-unit repeat, full range, or the fluid motion.
                 float2 sampleR = 1.0 - abs(fract(r * 0.5) * 2.0 - 1.0);
+                sampleR = sampleR * sampleR * (3.0 - 2.0 * sampleR);
                 float2 depthBase = r + (q - float2(0.5, 0.5)) * (0.045 + mids * 0.035);
                 float2 depthR = 1.0 - abs(fract(depthBase * 0.5) * 2.0 - 1.0);
-                float2 tc = sampleR * fieldRes;
-                float2 depthTc = depthR * fieldRes;
+                depthR = depthR * depthR * (3.0 - 2.0 * depthR);
+
+                // Stay on source texel centres; evaluating exactly at 0 or fieldRes
+                // otherwise activates the child shader's clamp at the fold boundary.
+                float2 tc = 0.5 + sampleR * (fieldRes - 1.0);
+                float2 depthTc = 0.5 + depthR * (fieldRes - 1.0);
                 float depthMix = 0.10 + mids * 0.09;
                 half4 col = field.eval(tc);
                 half4 depthCol = field.eval(depthTc);
@@ -1575,6 +1582,20 @@ class DiffuseWallpaperService : WallpaperService() {
                     cur = next
                 }
 
+                // Smooth the complete float16 field before the runtime shader sees it.
+                // The mip/Kawase chain can preserve steep colour boundaries from simple
+                // two-tone covers; domain warping turns those into large moving contours.
+                // A separable 5-tap Gaussian here removes the short transitions at source
+                // resolution, once per artwork change, instead of adding costly full-screen
+                // texture reads to every animation frame.
+                // Blur is an enhancement, never a reason to discard valid
+                // album art if the device cannot allocate a temporary bitmap.
+                val softened = try { softenOgField(cur) } catch (_: Exception) { null }
+                if (softened != null) {
+                    cur.recycle()
+                    cur = softened
+                }
+
                 // The original applied a brightness offset in kawaseBlur.frag so the field never
                 // crushed to black on dark art; replicate it with a light screen-style lift.
                 applyOgFieldLift(cur)
@@ -1620,6 +1641,51 @@ class DiffuseWallpaperService : WallpaperService() {
                 tapShader.setLocalMatrix(tapMatrix)
                 c.drawRect(dst, p)
             }
+            return out
+        }
+
+        /**
+         * A separable, float16-preserving Gaussian. Five binomial taps per axis
+         * (1,4,6,4,1)/16 have a smooth response with no hard kernel boundary.
+         * The 16 px spacing softens sharp source-colour transitions while retaining
+         * the large-scale structure that the fluid motion should move around.
+         * This is invoked by the background artwork worker, never per frame.
+         */
+        private fun softenOgField(field: Bitmap): Bitmap {
+            val horizontal = ogGaussianPass(field, horizontal = true)
+            return try {
+                ogGaussianPass(horizontal, horizontal = false)
+            } finally {
+                horizontal.recycle()
+            }
+        }
+
+        private fun ogGaussianPass(src: Bitmap, horizontal: Boolean): Bitmap {
+            val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.RGBA_F16)
+            val canvas = Canvas(out)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                isAntiAlias = true
+                isDither = true
+            }
+            val samples = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                samples.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+            }
+            paint.shader = samples
+            val matrix = android.graphics.Matrix()
+            val weights = intArrayOf(1, 4, 6, 4, 1)
+            var accumulated = 0
+            for (i in weights.indices) {
+                accumulated += weights[i]
+                // Source-over into an already opaque previous average: w/sum
+                // gives exactly the weighted mean, with no transparent margins.
+                paint.alpha = ((255f * weights[i]) / accumulated).toInt().coerceIn(0, 255)
+                val offset = (i - 2) * 16f
+                matrix.setTranslate(if (horizontal) offset else 0f, if (horizontal) 0f else offset)
+                samples.setLocalMatrix(matrix)
+                canvas.drawRect(0f, 0f, src.width.toFloat(), src.height.toFloat(), paint)
+            }
+            paint.shader = null
             return out
         }
 
@@ -1826,16 +1892,26 @@ class DiffuseWallpaperService : WallpaperService() {
             for (index in centers.indices) {
                 val cx = centers[index][0] * size
                 val cy = centers[index][1] * size
+                // The old three-stop gradient faded linearly to TRANSPARENT
+                // black, with abrupt changes in slope at the middle and outer
+                // stops. Warping those circular knees produces visible contour
+                // rings, especially on near-monochrome artwork. A densely sampled
+                // smoothstep alpha falloff is flat at both ends (C1), and all
+                // stops use the original palette hue, including zero alpha.
+                // The 25 segments closely approximate the smooth derivative.
+                val centerAlpha = if (index == centers.lastIndex) 135 else 190
+                val positions = FloatArray(25) { it / 24f }
+                val colors = IntArray(positions.size) { i ->
+                    val t = positions[i]
+                    val fade = t * t * (3f - 2f * t)
+                    withAlpha(shades[index], (centerAlpha * (1f - fade)).toInt())
+                }
                 idleFieldPaint.shader = RadialGradient(
                     cx,
                     cy,
                     radius,
-                    intArrayOf(
-                        withAlpha(shades[index], if (index == centers.lastIndex) 135 else 190),
-                        withAlpha(shades[index], 70),
-                        Color.TRANSPARENT
-                    ),
-                    floatArrayOf(0f, 0.56f, 1f),
+                    colors,
+                    positions,
                     Shader.TileMode.CLAMP
                 )
                 fieldCanvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), idleFieldPaint)
