@@ -1582,6 +1582,16 @@ class DiffuseWallpaperService : WallpaperService() {
                     cur = next
                 }
 
+                // Smooth the complete float16 field before the runtime shader sees it.
+                // The mip/Kawase chain can preserve steep colour boundaries from simple
+                // two-tone covers; domain warping turns those into large moving contours.
+                // A separable 5-tap Gaussian here removes the short transitions at source
+                // resolution, once per artwork change, instead of adding costly full-screen
+                // texture reads to every animation frame.
+                val softened = softenOgField(cur)
+                cur.recycle()
+                cur = softened
+
                 // The original applied a brightness offset in kawaseBlur.frag so the field never
                 // crushed to black on dark art; replicate it with a light screen-style lift.
                 applyOgFieldLift(cur)
@@ -1627,6 +1637,51 @@ class DiffuseWallpaperService : WallpaperService() {
                 tapShader.setLocalMatrix(tapMatrix)
                 c.drawRect(dst, p)
             }
+            return out
+        }
+
+        /**
+         * A separable, float16-preserving Gaussian. Five binomial taps per axis
+         * (1,4,6,4,1)/16 have a smooth response with no hard kernel boundary.
+         * The 16 px spacing softens sharp source-colour transitions while retaining
+         * the large-scale structure that the fluid motion should move around.
+         * This is invoked by the background artwork worker, never per frame.
+         */
+        private fun softenOgField(field: Bitmap): Bitmap {
+            val horizontal = ogGaussianPass(field, horizontal = true)
+            return try {
+                ogGaussianPass(horizontal, horizontal = false)
+            } finally {
+                horizontal.recycle()
+            }
+        }
+
+        private fun ogGaussianPass(src: Bitmap, horizontal: Boolean): Bitmap {
+            val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.RGBA_F16)
+            val canvas = Canvas(out)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                isAntiAlias = true
+                isDither = true
+            }
+            val samples = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                samples.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+            }
+            paint.shader = samples
+            val matrix = android.graphics.Matrix()
+            val weights = intArrayOf(1, 4, 6, 4, 1)
+            var accumulated = 0
+            for (i in weights.indices) {
+                accumulated += weights[i]
+                // Source-over into an already opaque previous average: w/sum
+                // gives exactly the weighted mean, with no transparent margins.
+                paint.alpha = ((255f * weights[i]) / accumulated).toInt().coerceIn(0, 255)
+                val offset = (i - 2) * 16f
+                matrix.setTranslate(if (horizontal) offset else 0f, if (horizontal) 0f else offset)
+                samples.setLocalMatrix(matrix)
+                canvas.drawRect(0f, 0f, src.width.toFloat(), src.height.toFloat(), paint)
+            }
+            paint.shader = null
             return out
         }
 
@@ -1833,16 +1888,26 @@ class DiffuseWallpaperService : WallpaperService() {
             for (index in centers.indices) {
                 val cx = centers[index][0] * size
                 val cy = centers[index][1] * size
+                // The old three-stop gradient faded linearly to TRANSPARENT
+                // black and ended abruptly at radius = 1. Repeating its edge
+                // through the warp made obvious curved rings on muted artwork.
+                // Multiple same-hue, low-alpha outer stops taper the falloff so
+                // it vanishes gently instead of drawing a contour.
+                val centerAlpha = if (index == centers.lastIndex) 135 else 190
                 idleFieldPaint.shader = RadialGradient(
                     cx,
                     cy,
                     radius,
                     intArrayOf(
-                        withAlpha(shades[index], if (index == centers.lastIndex) 135 else 190),
-                        withAlpha(shades[index], 70),
-                        Color.TRANSPARENT
+                        withAlpha(shades[index], centerAlpha),
+                        withAlpha(shades[index], (centerAlpha * 0.82f).toInt()),
+                        withAlpha(shades[index], 82),
+                        withAlpha(shades[index], 28),
+                        withAlpha(shades[index], 7),
+                        withAlpha(shades[index], 1),
+                        withAlpha(shades[index], 0)
                     ),
-                    floatArrayOf(0f, 0.56f, 1f),
+                    floatArrayOf(0f, 0.42f, 0.67f, 0.82f, 0.91f, 0.97f, 1f),
                     Shader.TileMode.CLAMP
                 )
                 fieldCanvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), idleFieldPaint)
