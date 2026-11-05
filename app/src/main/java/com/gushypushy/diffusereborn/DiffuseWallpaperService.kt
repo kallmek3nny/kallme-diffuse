@@ -1588,9 +1588,13 @@ class DiffuseWallpaperService : WallpaperService() {
                 // A separable 5-tap Gaussian here removes the short transitions at source
                 // resolution, once per artwork change, instead of adding costly full-screen
                 // texture reads to every animation frame.
-                val softened = softenOgField(cur)
-                cur.recycle()
-                cur = softened
+                // Blur is an enhancement, never a reason to discard valid
+                // album art if the device cannot allocate a temporary bitmap.
+                val softened = try { softenOgField(cur) } catch (_: Exception) { null }
+                if (softened != null) {
+                    cur.recycle()
+                    cur = softened
+                }
 
                 // The original applied a brightness offset in kawaseBlur.frag so the field never
                 // crushed to black on dark art; replicate it with a light screen-style lift.
@@ -1894,6 +1898,7 @@ class DiffuseWallpaperService : WallpaperService() {
                 // rings, especially on near-monochrome artwork. A densely sampled
                 // smoothstep alpha falloff is flat at both ends (C1), and all
                 // stops use the original palette hue, including zero alpha.
+                // The 25 segments closely approximate the smooth derivative.
                 val centerAlpha = if (index == centers.lastIndex) 135 else 190
                 val positions = FloatArray(25) { it / 24f }
                 val colors = IntArray(positions.size) { i ->
