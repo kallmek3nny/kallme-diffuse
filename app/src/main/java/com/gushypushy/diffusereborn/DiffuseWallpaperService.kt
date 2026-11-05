@@ -1889,25 +1889,24 @@ class DiffuseWallpaperService : WallpaperService() {
                 val cx = centers[index][0] * size
                 val cy = centers[index][1] * size
                 // The old three-stop gradient faded linearly to TRANSPARENT
-                // black and ended abruptly at radius = 1. Repeating its edge
-                // through the warp made obvious curved rings on muted artwork.
-                // Multiple same-hue, low-alpha outer stops taper the falloff so
-                // it vanishes gently instead of drawing a contour.
+                // black, with abrupt changes in slope at the middle and outer
+                // stops. Warping those circular knees produces visible contour
+                // rings, especially on near-monochrome artwork. A densely sampled
+                // smoothstep alpha falloff is flat at both ends (C1), and all
+                // stops use the original palette hue, including zero alpha.
                 val centerAlpha = if (index == centers.lastIndex) 135 else 190
+                val positions = FloatArray(25) { it / 24f }
+                val colors = IntArray(positions.size) { i ->
+                    val t = positions[i]
+                    val fade = t * t * (3f - 2f * t)
+                    withAlpha(shades[index], (centerAlpha * (1f - fade)).toInt())
+                }
                 idleFieldPaint.shader = RadialGradient(
                     cx,
                     cy,
                     radius,
-                    intArrayOf(
-                        withAlpha(shades[index], centerAlpha),
-                        withAlpha(shades[index], (centerAlpha * 0.82f).toInt()),
-                        withAlpha(shades[index], 82),
-                        withAlpha(shades[index], 28),
-                        withAlpha(shades[index], 7),
-                        withAlpha(shades[index], 1),
-                        withAlpha(shades[index], 0)
-                    ),
-                    floatArrayOf(0f, 0.42f, 0.67f, 0.82f, 0.91f, 0.97f, 1f),
+                    colors,
+                    positions,
                     Shader.TileMode.CLAMP
                 )
                 fieldCanvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), idleFieldPaint)
